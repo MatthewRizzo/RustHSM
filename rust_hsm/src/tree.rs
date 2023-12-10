@@ -6,24 +6,24 @@
 /// Abstracts the operation of comparing 2 nodes in a tree.
 /// So long as your node implements it, and that node is used for your struct
 /// containing the tree in this file, it should all work!
-pub trait NodeDataConstraints {
-    /// Return true if the 2 nodes are the same
-    fn is_matching_node(&self, other: &Self) -> bool;
-}
+pub trait NodeDataConstraints {}
 
 /// Generic tree that can be used anywhere! As long as the traits of its nodes
 /// are met.
+/// Most likely requires an LTM to hold all the node's as the tree only accepts
+/// references.
 pub(crate) struct Tree<'a, Node>
 where
     Node: NodeOperations<'a>,
 {
+    // maybe nodes should be owned references??
     nodes: Vec<&'a Node>,
     num_nodes: u32,
 }
 
 // The nodes of the tree
 // todo - consider making private
-pub struct TreeNode<'a, NodeDataType: NodeDataConstraints> {
+pub struct TreeNode<'a, NodeDataType: NodeDataConstraints + PartialEq> {
     data: NodeDataType,
 
     /// The root node of the entire tree. None if this node IS the root.
@@ -34,7 +34,7 @@ pub struct TreeNode<'a, NodeDataType: NodeDataConstraints> {
 
 impl<'a, Node> Tree<'a, Node>
 where
-    Node: NodeOperations<'a, NodeImpl = Node> + NodeDataConstraints,
+    Node: NodeOperations<'a, NodeImpl = Node> + PartialEq,
 {
     /// Use this to create tree
     pub fn create_tree(root_node: &'a Node) -> Tree<'a, Node> {
@@ -46,33 +46,35 @@ where
 
     /// Adds the node and returns its node id
     pub fn add_node(&mut self, node: &'a Node) -> u32 {
+        let node_id = self.num_nodes;
         self.num_nodes += 1;
         self.nodes.push(node);
-        self.num_nodes
+        node_id
+    }
+
+    pub fn create_node(&self, data: Node::NodeDataType, parent_node: &'a Node) -> Node {
+        Node::new(data, Some(parent_node), Some(self.get_root_node()))
     }
 
     /// Inspiration: https://stackoverflow.com/a/61512383/14810215
-    fn find_path_between_nodes(&'a self, start_node_id: u32, end_node_id: u32) -> Vec<&'a Node>
-    where
-        <Node as NodeOperations<'a>>::NodeImpl: NodeDataConstraints,
-    {
+    /// Finds the path between 2 nodes. Includes the starting and ending node.
+    fn find_path_between_nodes(&'a self, start_node_id: u32, end_node_id: u32) -> Vec<&'a Node> {
         let start_node = self.get_node_by_id(start_node_id);
         let end_node = self.get_node_by_id(end_node_id);
 
-        let mut start_path_to_root: Vec<&<Node as NodeOperations>::NodeImpl> =
-            start_node.get_path_to_root::<Node>();
-        let mut destination_path_to_root: Vec<&<Node as NodeOperations>::NodeImpl> =
-            end_node.get_path_to_root::<Node>();
+        let mut start_path_to_root = start_node.get_path_to_root();
+        let mut destination_path_to_root = end_node.get_path_to_root();
 
-        let mut _common_node = None;
+        // the last node in common between the paths
+        let mut last_common_node = None;
 
         // Compare the two paths, starting from the ends of the paths (where the root is)
         // as long as they are the same, remove that common node from both paths.
         while start_path_to_root.len() > 0 && destination_path_to_root.len() > 0 {
             let starting_path_node = start_path_to_root[start_path_to_root.len() - 1];
             let ending_path_node = destination_path_to_root[destination_path_to_root.len() - 1];
-            if starting_path_node.is_matching_node(ending_path_node) {
-                _common_node = Some(start_path_to_root.pop());
+            if starting_path_node == ending_path_node {
+                last_common_node = start_path_to_root.pop();
                 destination_path_to_root.pop();
             } else {
                 // stop once the path's diverge
@@ -86,9 +88,18 @@ where
         common_to_dest.reverse();
 
         let mut full_path: Vec<&Node> = start_path_to_root;
+
+        // add the last link in chain between the nodes to path
+        if last_common_node.is_some() {
+            full_path.push(last_common_node.unwrap());
+        }
         full_path.append(&mut common_to_dest);
 
         return full_path;
+    }
+
+    fn get_root_node(&self) -> &'a Node {
+        self.nodes[0]
     }
 }
 
@@ -129,7 +140,9 @@ where
 pub(crate) trait NodeOperations<'a> {
     type NodeImpl;
     type NodeDataType: NodeDataConstraints;
-    fn get_path_to_root<NodeImpl: NodeDataConstraints>(&'a self) -> Vec<&'a Self::NodeImpl>;
+
+    // Get the path to root, including root
+    fn get_path_to_root(&'a self) -> Vec<&'a Self::NodeImpl>;
 
     // Private abstract method for creating a node.
     // Used by the tree to help add to itself
@@ -140,9 +153,20 @@ pub(crate) trait NodeOperations<'a> {
     ) -> Self;
 }
 
+impl<'a, NodeDataType> PartialEq for TreeNode<'a, NodeDataType>
+where
+    NodeDataType: NodeDataConstraints,
+    NodeDataType: PartialEq,
+{
+    fn eq(&self, other: &TreeNode<'a, NodeDataType>) -> bool {
+        self.data == other.data
+    }
+}
+
 impl<'a, NodeDataType> NodeOperations<'a> for TreeNode<'a, NodeDataType>
 where
     NodeDataType: NodeDataConstraints,
+    NodeDataType: PartialEq,
 {
     type NodeImpl = TreeNode<'a, NodeDataType>;
     type NodeDataType = NodeDataType;
@@ -151,7 +175,7 @@ where
     /// last element should be root
     /// first element is self
     /// todo - unit test this
-    fn get_path_to_root<NodeImpl>(&'a self) -> Vec<&'a Self::NodeImpl> {
+    fn get_path_to_root(&'a self) -> Vec<&'a Self::NodeImpl> {
         let mut previous_node: &'a TreeNode<'a, NodeDataType> = self;
         let mut current_node = Some(self);
 
@@ -184,29 +208,86 @@ where
 mod tests {
     use super::*;
 
+    #[derive(PartialEq, Debug, Clone)]
     struct TestData {
         fake_data: u8,
     }
 
-    impl NodeDataConstraints for TestData {
-        fn is_matching_node(&self, other: &Self) -> bool {
-            self.fake_data == other.fake_data
-        }
+    impl NodeDataConstraints for TestData {}
+
+    struct TestNodes<'a> {
+        root_node: TreeNode<'a, TestData>,
+        node1: TreeNode<'a, TestData>,
+        node2: TreeNode<'a, TestData>,
+        node3: TreeNode<'a, TestData>,
     }
 
-    fn create_tree() {
+    #[test]
+    fn test_create_tree() {
         let root_data = TestData { fake_data: 1 };
         let data1 = TestData { fake_data: 2 };
         let data2 = TestData { fake_data: 3 };
         let data3 = TestData { fake_data: 4 };
 
-        let tree_root: TreeNode<TestData> = Tree::create_root_node(root_data);
-        // let mut tree: Tree<'_, TreeNode<'_, TestData>> = Tree::create_tree(&root_node);
+        let root_node: TreeNode<TestData> = Tree::create_root_node(root_data.clone());
+        let mut tree: Tree<TreeNode<TestData>> = Tree::create_tree(&root_node);
 
-        // tree.create_node()
-        // let depth_one_node_1 = TreeNode::new(data1,
-        //     &root_node,
-        //     &root_node
-        // );
+        assert_eq!(tree.num_nodes, 1);
+        assert_eq!(tree.get_node_by_id(0).data, root_data);
+
+        let node1 = tree.create_node(data1.clone(), &root_node);
+        let node2 = tree.create_node(data2.clone(), &root_node);
+        let child_node3 = tree.create_node(data3.clone(), &node1);
+
+        let node1_id = tree.add_node(&node1);
+        let node2_id = tree.add_node(&node2);
+        let child_node3_id = tree.add_node(&child_node3);
+
+        assert_eq!(node1_id, 1);
+        assert_eq!(node2_id, 2);
+        assert_eq!(child_node3_id, 3);
+
+        assert_eq!(tree.get_node_by_id(node1_id).data, data1);
+        assert_eq!(tree.get_node_by_id(node2_id).data, data2);
+        assert_eq!(tree.get_node_by_id(child_node3_id).data, data3);
+
+        // test pathing between nodes
+
+        let node_1_to_2_path = tree.find_path_between_nodes(1, 2);
+        assert_eq!(node_1_to_2_path.len(), 3, "Nodes in path from 1->2 = 3");
+        assert_eq!(node_1_to_2_path[0].data, node1.data, "Expected node 1 data");
+        assert_eq!(
+            node_1_to_2_path[1].data, root_node.data,
+            "Expected root node data"
+        );
     }
+
+    #[test]
+    fn test_get_path_to_root() {
+        let root_data = TestData { fake_data: 1 };
+        let data1 = TestData { fake_data: 2 };
+        let data2 = TestData { fake_data: 3 };
+
+        let root_node: TreeNode<TestData> = Tree::create_root_node(root_data.clone());
+        let mut tree: Tree<TreeNode<TestData>> = Tree::create_tree(&root_node);
+
+        let node1 = tree.create_node(data1.clone(), &root_node);
+        let node2 = tree.create_node(data2.clone(), &root_node);
+        let node1_id = tree.add_node(&node1);
+        let node2_id = tree.add_node(&node2);
+
+        let node1_to_root = node1.get_path_to_root();
+        let node2_to_root = node2.get_path_to_root();
+
+        assert_eq!(node1_to_root.len(), 2);
+        assert_eq!(node2_to_root.len(), 2);
+
+        assert_eq!(node1_to_root[0].data, data1);
+        assert_eq!(node1_to_root[1].data, root_data);
+
+        assert_eq!(node2_to_root[0].data, data2);
+        assert_eq!(node2_to_root[1].data, root_data);
+    }
+
+    // todo - more tests
 }
