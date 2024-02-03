@@ -7,8 +7,8 @@ pub type HSMResult<T> = std::result::Result<T, HSMError>;
 pub enum HSMError {
     #[error("Generic Error")]
     GenericError(String),
-    // #[error("I/O error")]
-    // IOError(#[from] std::io::Error),
     #[error("IO Error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("Event Not Implemented Error")]
+    EventNotImplemented(String)
 }
