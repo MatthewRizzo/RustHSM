@@ -1,0 +1,19 @@
+[package]
+name = "rust_hsm_project"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[workspace]
+members = [
+    "rust_hsm",
+    "example_hsm"
+]
+
+[dependencies]
+thiserror = "1.0.51"
+rust_hsm = { path = "rust_hsm" }
+
+[[bin]]
+path = "example_hsm/src/main.rs"
+name = "example_hsm"
