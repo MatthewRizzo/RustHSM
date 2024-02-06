@@ -17,3 +17,7 @@ rust_hsm = { path = "rust_hsm" }
 [[bin]]
 path = "example_hsm/src/main.rs"
 name = "example_hsm"
+
+# [lib]
+# path = "rust_hsm/src/lib.rs"
+# name = "rust_hsm"

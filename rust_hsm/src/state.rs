@@ -1,11 +1,7 @@
 ///! This file contains the logic for an individual state and how they link together
 use std::{cell::RefCell, rc::Rc};
 
-use crate::{
-    callback::Callback,
-    callback_registry::{CallbackRegistry, CallbackRegistryPair},
-    events::DecoratableEventBase,
-};
+use crate::{events::HsmEvent, state_controller_trait::HsmControllerRef};
 
 #[derive(PartialEq, Clone)]
 pub struct StateId {
@@ -32,26 +28,19 @@ impl StateId {
     }
 }
 
-pub type RefStates = Vec<Rc<RefCell<ComposableStateBase>>>;
-
-pub type EventHandlerRegistry = CallbackRegistry<(), DecoratableEventBase, Callback<(), bool>>;
-
-// Base state struct your actual state's should be composed of
-pub struct ComposableStateBase {
-    state_id: StateId,
-    // None if there is no parent state (i.e. TOP state)
-    state_name: String,
-    parent_state: Option<Rc<RefCell<Self>>>,
-    event_handlers: Rc<RefCell<EventHandlerRegistry>>,
-    handle_state_exit: Option<Callback<(), ()>>,
-    handle_state_enter: Option<Callback<(), ()>>,
-    handle_state_start: Option<Callback<(), ()>>,
+impl std::fmt::Display for StateId {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "id: {}", self.id)
+    }
 }
 
-/// Traits that all state's must implement to be used
-pub trait StateBaseBehavior {
-    // type EventEnum;
+pub type StatesRefVec = Vec<Rc<RefCell<dyn StateChainOfResponsibility>>>;
+pub type StateRef = Rc<RefCell<dyn StateChainOfResponsibility>>;
 
+/// Traits that all state's must implement to be used
+/// # Reference
+/// https://github.com/lpxxn/rust-design-pattern/blob/master/behavioral/chain_of_responsibility.rs
+pub trait StateChainOfResponsibility {
     /// Called whenever state is entered (even if transiently).
     /// If multiple states are traveled through, it is called multiple times
     /// by every relevant state
@@ -62,91 +51,89 @@ pub trait StateBaseBehavior {
 
     /// Called when transitioning out of the state
     fn handle_state_exit(&mut self) {}
+
+    /// All state's implement this.
+    /// Recommendation is converting event to an enum and handling the cases you want.
+    /// # Return
+    /// * True if handled. Do not keep handling
+    /// * False if not handled and should be delegated to a higher state.
+    fn handle_event(&mut self, event_id: &HsmEvent) -> bool;
+
+    fn get_state_data(&self) -> &ComposableStateData;
+
+    fn get_state_id(&self) -> StateId {
+        self.get_state_data().get_state_id()
+    }
+
+    fn get_super_state(&self) -> Option<StateRef> {
+        self.get_state_data().get_parent_state()
+    }
+
+    fn get_state_name(&self) -> String {
+        self.get_state_data().get_state_name()
+    }
+
+    fn get_hsm(&self) -> HsmControllerRef {
+        self.get_state_data().get_hsm()
+    }
+
+    /// Gets the path to root. Including self and root.
+    fn get_path_to_root_state(&self) -> Vec<StateId> {
+        let mut path_to_root = Vec::<StateId>::new();
+        path_to_root.push(self.get_state_id().clone());
+
+        let mut current_state = self.get_super_state();
+
+        while let Some(state) = current_state {
+            path_to_root.push(state.borrow().get_state_id().clone());
+
+            let opt_parent_state = state.borrow().get_super_state();
+            current_state = opt_parent_state;
+        }
+
+        path_to_root
+    }
 }
 
-impl<'a> ComposableStateBase {
-    /// RAII register all event handlers!
-    /// If multiple handlers for the same function are registered, last one wins!
-    pub fn new(
-        state_id: StateId,
-        state_name: String,
-        parent_state: Option<Rc<RefCell<Self>>>,
-        handle_state_exit: Option<Callback<(), ()>>,
-        handle_state_enter: Option<Callback<(), ()>>,
-        handle_state_start: Option<Callback<(), ()>>,
-        event_handlers: Vec<CallbackRegistryPair<(), DecoratableEventBase, Callback<(), bool>>>,
-    ) -> Self {
-        let registry = CallbackRegistry::new(event_handlers);
+// Base state struct your actual state's should be composed of
+// Has all the information you need to impl the data-oriented API's of the state trait
+pub struct ComposableStateData {
+    state_id: StateId,
+    // None if there is no parent state (i.e. TOP state)
+    state_name: String,
+    parent_state: Option<StateRef>,
+    state_machine: HsmControllerRef,
+}
 
-        ComposableStateBase {
-            state_id,
+impl ComposableStateData {
+    pub fn new(
+        state_id: u16,
+        state_name: String,
+        parent_state: Option<StateRef>,
+        state_machine: HsmControllerRef,
+    ) -> Self {
+        Self {
+            state_id: StateId::new(state_id),
             state_name,
             parent_state,
-            event_handlers: Rc::new(RefCell::new(registry)),
-            handle_state_exit,
-            handle_state_enter,
-            handle_state_start,
+            state_machine,
         }
     }
 
-    pub(crate) fn get_state_name(&self) -> &String {
-        &self.state_name
+    pub(crate) fn get_state_id(&self) -> StateId {
+        self.state_id.clone()
     }
 
-    pub fn get_state_id(&self) -> &StateId {
-        &self.state_id
+    pub(crate) fn get_state_name(&self) -> String {
+        self.state_name.clone()
     }
 
-    /// Gets path to root from this state. Inclusive on both ends.
-    pub(crate) fn get_path_to_root(&self) -> Vec<StateId> {
-        let mut root_path: Vec<StateId> = vec![];
-        root_path.push(self.state_id.clone());
-
-        let current_state_optional = self;
-        while let Some(current_state) = current_state_optional.parent_state.clone() {
-            let current_state_id = &current_state.as_ref().borrow().state_id;
-            root_path.push(current_state_id.clone());
-        }
-
-        root_path
+    pub(crate) fn get_parent_state(&self) -> Option<StateRef> {
+        self.parent_state.clone()
     }
 
-    pub(crate) fn handle_state_exit(&self) {
-        if self.handle_state_exit.is_some() {
-            Callback::fire_through_reference(&self.handle_state_exit, ());
-        }
-    }
-
-    pub(crate) fn handle_state_enter(&self) {
-        if self.handle_state_enter.is_some() {
-            Callback::fire_through_reference(&self.handle_state_enter, ());
-        }
-    }
-
-    pub(crate) fn handle_state_start(&self) {
-        if self.handle_state_start.is_some() {
-            Callback::fire_through_reference(&self.handle_state_start, ());
-        }
-    }
-
-    pub(crate) fn get_parent_state(current_state: &Self) -> Option<Rc<RefCell<Self>>> {
-        current_state.parent_state.clone()
-    }
-
-    /// True if this state handles it. False otherwise.
-    pub(crate) fn handle_event(current_state: &Self, event: &DecoratableEventBase) -> bool {
-        let current_registry = &current_state.event_handlers;
-        current_registry
-            .as_ref()
-            .borrow()
-            .dispatch_to_registry(event, ())
-            .is_some()
-    }
-}
-
-impl PartialEq<ComposableStateBase> for ComposableStateBase {
-    fn eq(&self, other: &ComposableStateBase) -> bool {
-        self.state_id == other.state_id && self.parent_state == other.parent_state
+    pub fn get_hsm(&self) -> HsmControllerRef {
+        self.state_machine.clone()
     }
 }
 
