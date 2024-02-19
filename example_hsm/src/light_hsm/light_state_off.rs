@@ -1,5 +1,5 @@
 use rust_hsm::{
-    events::HsmEvent,
+    events::StateEventsIF,
     state::{ComposableStateData, StateChainOfResponsibility, StateRef},
     state_controller_trait::HsmControllerRef,
 };
@@ -48,12 +48,15 @@ impl LightStateOff {
 }
 
 impl StateChainOfResponsibility for LightStateOff {
-    fn handle_event(&mut self, event_id: &HsmEvent) -> bool {
-        let events: LightEvents = LightEvents::from(event_id);
+    fn handle_event(
+        &mut self,
+        event: &dyn StateEventsIF
+    ) -> bool {
+        let events: LightEvents = LightEvents::from(event);
         // top returns true for all events
         match events {
             LightEvents::Toggle => self.handle_toggle(),
-            LightEvents::TurnOff => self.handle_turn_on(),
+            LightEvents::TurnOn => self.handle_turn_on(),
             _ => false,
         }
     }

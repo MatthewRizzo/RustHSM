@@ -1,5 +1,5 @@
 use rust_hsm::{
-    events::HsmEvent,
+    events::StateEventsIF,
     state::{ComposableStateData, StateChainOfResponsibility, StateRef},
     state_controller_trait::HsmControllerRef,
 };
@@ -48,7 +48,7 @@ impl LightStateDimmer {
 }
 
 impl StateChainOfResponsibility for LightStateDimmer {
-    fn handle_event(&mut self, event_id: &HsmEvent) -> bool {
+    fn handle_event(&mut self, event_id: &dyn StateEventsIF) -> bool {
         let events: LightEvents = LightEvents::from(event_id);
         // top returns true for all events
         match events {

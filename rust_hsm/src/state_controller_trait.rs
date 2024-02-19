@@ -1,10 +1,13 @@
 use crate::{
     errors::{HSMError, HSMResult},
-    events::HsmEvent,
+    events::StateEventsIF,
     state::{StateId, StateRef, StatesRefVec},
 };
 
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::RefCell,
+    rc::Rc,
+};
 
 pub type HsmControllerRef = Rc<RefCell<dyn HsmController>>;
 
@@ -44,7 +47,11 @@ pub trait HsmController {
     /// Fire an event external to the HSM into it and see how it gets handled.
     /// If there is complicated threading between consumers and this HSM,
     /// override this function to navigate the ITC between them.
-    fn external_dispatch_into_hsm(&mut self, event: &HsmEvent);
+    // fn external_dispatch_into_hsm(&mut self, event: &dyn StateEventsIF);
+    fn external_dispatch_into_hsm(
+        &mut self,
+        event: &dyn StateEventsIF,
+    );
 
     fn add_state(&mut self, new_state: StateRef);
     fn get_current_state(&self) -> StateRef;
@@ -54,6 +61,7 @@ pub trait HsmController {
     fn set_requested_new_state(&mut self, requested_new_state: StateId);
     fn clear_requested_new_state(&mut self);
     fn get_state_change_string(&mut self) -> &mut String;
+    fn get_hsm_name(&self) -> String;
 
     /// Changes the state. Will IMMEDIATELY go to the LCA state, but will NOT
     /// go to target state until AFTER the handling of the current event that
@@ -106,9 +114,29 @@ pub trait HsmController {
 
     /// Send an event into the HSM from within the HSM.
     /// i.e. a state fires an event while handling another event
-    fn handle_event(&mut self, event: &HsmEvent) {
+    // fn handle_event(&mut self, event: &dyn StateEventsIF) {
+    fn handle_event(
+        &mut self,
+        event: &dyn StateEventsIF,
+    ) {
         // keep going until event is handled (true) or we reach the end
         let mut current_state = self.get_current_state();
+
+        let hsm_name = self.get_hsm_name();
+
+        let current_handle_string = self.get_state_change_string().clone();
+        self.get_state_change_string().clear();
+
+        self.get_state_change_string().push_str(
+            format!(
+                "{}: ({}) >> {}",
+                hsm_name,
+                current_handle_string,
+                current_state.borrow().get_state_name()
+            )
+            .as_str(),
+        );
+
         loop {
             let next_state = current_state.borrow().get_super_state();
 
@@ -116,12 +144,17 @@ pub trait HsmController {
                 break;
             }
 
-            let is_handled = current_state.borrow_mut().handle_event(event);
+            let is_handled = current_state
+                .borrow_mut()
+                .handle_event(event);
 
             if is_handled {
                 // event has been handled!
                 break;
             }
+
+            self.get_state_change_string()
+                .push_str(format!(" > {}", current_state.borrow().get_state_name()).as_str());
 
             // See if parent state handles this
             current_state = next_state.unwrap();
@@ -151,6 +184,9 @@ pub trait HsmController {
     /// Only then do we START the target state
     fn handle_state_change(&mut self) {
         if self.get_requested_new_state().is_none() {
+            println!("{}", self.get_state_change_string());
+            self.get_state_change_string().clear();
+            self.clear_requested_new_state();
             return;
         }
 

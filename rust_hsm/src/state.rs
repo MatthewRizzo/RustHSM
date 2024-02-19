@@ -1,7 +1,10 @@
 ///! This file contains the logic for an individual state and how they link together
 use std::{cell::RefCell, rc::Rc};
 
-use crate::{events::HsmEvent, state_controller_trait::HsmControllerRef};
+use crate::{
+    events::StateEventsIF,
+    state_controller_trait::HsmControllerRef,
+};
 
 #[derive(PartialEq, Clone)]
 pub struct StateId {
@@ -57,7 +60,10 @@ pub trait StateChainOfResponsibility {
     /// # Return
     /// * True if handled. Do not keep handling
     /// * False if not handled and should be delegated to a higher state.
-    fn handle_event(&mut self, event_id: &HsmEvent) -> bool;
+    fn handle_event(
+        &mut self,
+        event_id: &dyn StateEventsIF,
+    ) -> bool;
 
     fn get_state_data(&self) -> &ComposableStateData;
 

@@ -3,13 +3,14 @@ use std::{cell::RefCell, rc::Rc};
 ///! This file contains the logic for a state engine comprised of many
 ///! composable states
 use crate::{
-    events::HsmEvent,
+    events::StateEventsIF,
     state::{StateId, StateRef, StatesRefVec},
     state_controller_trait::{HsmController, HsmControllerRef},
 };
 
 /// Compose / decorate your hsm controller with this
 pub struct DecoratableHSMControllerBase {
+    hsm_name: String,
     /// We own the vector of states, but the states themselves are owned by others
     states: StatesRefVec,
     /// Only ever optional before init
@@ -21,8 +22,9 @@ pub struct DecoratableHSMControllerBase {
 }
 
 impl DecoratableHSMControllerBase {
-    pub fn new() -> HsmControllerRef {
+    pub fn new(hsm_name: String) -> HsmControllerRef {
         Rc::new(RefCell::new(DecoratableHSMControllerBase {
+            hsm_name,
             states: vec![],
             current_state: None,
             requested_new_state: None,
@@ -36,7 +38,7 @@ impl HsmController for DecoratableHSMControllerBase {
         self.states.push(new_state.clone());
     }
 
-    fn external_dispatch_into_hsm(&mut self, event: &HsmEvent) {
+    fn external_dispatch_into_hsm(&mut self, event: &dyn StateEventsIF) {
         // Override for a more custom implementation
         self.handle_event(event)
     }
@@ -76,5 +78,9 @@ impl HsmController for DecoratableHSMControllerBase {
 
     fn clear_requested_new_state(&mut self) {
         self.requested_new_state = None;
+    }
+
+    fn get_hsm_name(&self) -> String {
+        self.hsm_name.clone()
     }
 }

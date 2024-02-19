@@ -1,7 +1,7 @@
 use std::{cell::RefCell, rc::Rc};
 
 use rust_hsm::{
-    events::HsmEvent,
+    events::StateEventsIF,
     state::{ComposableStateData, StateChainOfResponsibility},
     state_controller_trait::HsmControllerRef,
 };
@@ -26,8 +26,11 @@ impl LightStateTop {
 }
 
 impl StateChainOfResponsibility for LightStateTop {
-    fn handle_event(&mut self, event_id: &HsmEvent) -> bool {
-        let events: LightEvents = LightEvents::from(event_id);
+    fn handle_event(
+        &mut self,
+        event: &dyn StateEventsIF
+    ) -> bool {
+        let events: LightEvents = LightEvents::from(event);
         // top returns true for all events
         match events {
             _ => true,

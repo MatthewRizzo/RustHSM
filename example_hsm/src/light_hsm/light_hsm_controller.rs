@@ -1,7 +1,8 @@
 use std::{cell::RefCell, rc::Rc};
 
 use rust_hsm::{
-    state::StateRef, state_controller::DecoratableHSMControllerBase,
+    state::StateRef,
+    state_controller::DecoratableHSMControllerBase,
     state_controller_trait::HsmControllerRef,
 };
 
@@ -14,19 +15,20 @@ use crate::light_hsm::{
     light_state_top::LightStateTop,
 };
 
-pub struct LightHsmController {
+pub struct LightControllerHsm {
     hsm: HsmControllerRef,
     _shared_data: LightHsmDataRef,
 }
 
-impl LightHsmController {
+impl LightControllerHsm {
     pub fn new() -> Rc<RefCell<Self>> {
-        let hsm: HsmControllerRef = DecoratableHSMControllerBase::new();
+        let hsm: HsmControllerRef =
+            DecoratableHSMControllerBase::new("LightControllerHsm".to_string());
 
         // Start the light "off"
         let shared_data = LightHsmData::new(0);
 
-        let light_hsm = Rc::new(RefCell::new(LightHsmController {
+        let light_hsm = Rc::new(RefCell::new(LightControllerHsm {
             hsm,
             _shared_data: shared_data.clone(),
         }));
@@ -79,10 +81,12 @@ impl LightHsmController {
         self.hsm.borrow().get_current_state().clone()
     }
 
-    pub fn dispatch_into_hsm(&mut self, event: LightEvents) {
-        let event_base = event.to_event_base();
-        self.hsm
-            .borrow_mut()
-            .external_dispatch_into_hsm(&event_base);
+    pub fn dispatch_into_hsm(
+        &self,
+        event: LightEvents,
+    ) {
+        self
+            .get_hsm().clone().borrow_mut()
+            .external_dispatch_into_hsm(&event);
     }
 }

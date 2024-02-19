@@ -1,4 +1,4 @@
-use rust_hsm::events::HsmEvent;
+use rust_hsm::events::{HsmEvent, StateEventsIF};
 
 #[repr(u16)]
 #[derive(Copy, Clone)]
@@ -15,8 +15,8 @@ pub enum LightEvents {
     Invalid = u16::MAX,
 }
 
-impl From<&HsmEvent> for LightEvents {
-    fn from(event: &HsmEvent) -> Self {
+impl From<&dyn StateEventsIF> for LightEvents {
+    fn from(event: &dyn StateEventsIF) -> Self {
         match event.get_event_id() {
             1 => LightEvents::Toggle,
             2 => {
@@ -50,8 +50,27 @@ impl From<&HsmEvent> for LightEvents {
     }
 }
 
-impl LightEvents {
-    pub(crate) fn to_event_base(&self) -> HsmEvent {
+impl std::fmt::Display for LightEvents {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Self::Toggle => write!(f, "Toggle"),
+            Self::Set(_) => write!(f, "Set"),
+            Self::TurnOff => write!(f, "TurnOff"),
+            Self::TurnOn => write!(f, "TurnOn"),
+            Self::ReduceByPercent(_) => write!(f, "ReduceByPercent"),
+            Self::IncreaseByPercent(_) => write!(f, "IncreaseByPercent"),
+            Self::InvalidNumArgs(_) => write!(f, "InvalidNumArgs"),
+            Self::Invalid => write!(f, "Invalid"),
+        }
+    }
+}
+
+impl StateEventsIF for LightEvents {
+    fn get_event_name(&self) -> String {
+        format!("{}", self)
+    }
+
+    fn to_event_base(&self) -> HsmEvent {
         let event_id: u16;
         let mut event_args: Vec<u8> = vec![];
 
