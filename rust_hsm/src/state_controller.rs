@@ -9,7 +9,7 @@ use crate::{
 };
 
 /// Compose / decorate your hsm controller with this
-pub struct DecoratableHSMControllerBase {
+pub struct HSMControllerBase {
     hsm_name: String,
     /// We own the vector of states, but the states themselves are owned by others
     states: StatesRefVec,
@@ -19,9 +19,9 @@ pub struct DecoratableHSMControllerBase {
     state_change_string: String,
 }
 
-impl DecoratableHSMControllerBase {
+impl HSMControllerBase {
     pub fn new(hsm_name: String) -> HsmControllerRef {
-        Rc::new(RefCell::new(DecoratableHSMControllerBase {
+        Rc::new(RefCell::new(HSMControllerBase {
             hsm_name,
             states: vec![],
             current_state: None,
@@ -30,7 +30,7 @@ impl DecoratableHSMControllerBase {
     }
 }
 
-impl HsmController for DecoratableHSMControllerBase {
+impl HsmController for HSMControllerBase {
     fn add_state(&mut self, new_state: StateRef) {
         self.states.push(new_state.clone());
     }

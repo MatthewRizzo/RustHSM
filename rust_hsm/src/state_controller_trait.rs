@@ -10,7 +10,7 @@ pub type HsmControllerRef = Rc<RefCell<dyn HsmController>>;
 
 /// The traits required to be a proper HSM controller
 /// Everything is implemented for consumers.
-/// The rest is implemented by DecoratableHSMControllerBase.
+/// The rest is implemented by HSMControllerBase.
 /// No need to override.
 /// Used to allow indirection between states and controller.
 /// # Functions to implement that are trivial (if done right):

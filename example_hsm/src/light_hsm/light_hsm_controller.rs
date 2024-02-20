@@ -1,8 +1,7 @@
 use std::{cell::RefCell, rc::Rc};
 
 use rust_hsm::{
-    state::StateRef, state_controller::DecoratableHSMControllerBase,
-    state_controller_trait::HsmControllerRef,
+    state::StateRef, state_controller::HSMControllerBase, state_controller_trait::HsmControllerRef,
 };
 
 use crate::light_hsm::{
@@ -22,8 +21,7 @@ pub struct LightControllerHsm {
 
 impl LightControllerHsm {
     pub fn new() -> Rc<RefCell<Self>> {
-        let hsm: HsmControllerRef =
-            DecoratableHSMControllerBase::new("LightControllerHsm".to_string());
+        let hsm: HsmControllerRef = HSMControllerBase::new("LightControllerHsm".to_string());
 
         // Start the light "off"
         let shared_data = LightHsmData::new(0);
