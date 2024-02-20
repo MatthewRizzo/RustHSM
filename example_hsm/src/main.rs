@@ -25,4 +25,18 @@ fn main() {
             state.borrow().get_state_id().get_id()
         );
     }
+    // Test an un-handled event
+    {
+        light_hsm.borrow().dispatch_into_hsm(LightEvents::TurnOn);
+
+        let state = light_hsm.borrow().get_current_state();
+        let state_id = state.borrow().get_state_id();
+        let expected_state_id = StateId::new(LightStates::ON as u16);
+        assert!(
+            state_id == expected_state_id,
+            "Expected state id = {}. Found {}",
+            expected_state_id,
+            state.borrow().get_state_id().get_id()
+        );
+    }
 }

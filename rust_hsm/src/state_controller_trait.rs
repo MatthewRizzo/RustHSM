@@ -92,9 +92,6 @@ pub trait HsmController {
                 break;
             }
 
-            self.get_state_change_string()
-                .push_str(format!(" > {}", current_state.borrow().get_state_name()).as_str());
-
             // See if parent state handles this
             current_state = next_state.unwrap();
         }
@@ -147,15 +144,16 @@ pub trait HsmController {
             .get_state_data()
             .get_requested_state_change();
 
-        let is_target_current = requested_state_opt.clone().unwrap().get_id() == self.get_current_state().borrow().get_state_id().get_id();
-
         if requested_state_opt.is_none() {
             self.post_handle_event_operations();
             return;
         }
+
+        let is_target_current = requested_state_opt.clone().unwrap().get_id() == self.get_current_state().borrow().get_state_id().get_id();
+
         // We don't clear requests once completed - requires too much mutable access
         // Just no-op on all subsequent events
-        else if is_target_current {
+        if is_target_current {
             self.post_handle_event_operations();
         }
 
