@@ -16,7 +16,8 @@ use crate::light_hsm::{
 
 pub struct LightControllerHsm {
     hsm: HsmControllerRef,
-    _shared_data: LightHsmDataRef,
+    /// Again...leaking this is a bad idea. It is only done here for testing/asserting
+    pub(crate) _shared_data: LightHsmDataRef,
 }
 
 impl LightControllerHsm {
@@ -89,5 +90,11 @@ impl LightControllerHsm {
             .clone()
             .borrow_mut()
             .external_dispatch_into_hsm(&event);
+    }
+
+    /// In a real HSM this is a BAD idea. DO NOT LEAK the data
+    /// Only doing it here as an example and so some asserts can be done
+    pub fn get_light_data(&self) -> LightHsmDataRef {
+        self._shared_data.clone()
     }
 }

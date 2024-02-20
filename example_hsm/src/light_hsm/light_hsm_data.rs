@@ -1,6 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 
-pub(crate) type LightHsmDataRef = Rc<RefCell<LightHsmData>>;
+pub type LightHsmDataRef = Rc<RefCell<LightHsmData>>;
 
 pub enum LightAdjustment {
     Increase,
@@ -9,9 +9,10 @@ pub enum LightAdjustment {
 
 /// Data shared between the controller and the states, but that should be
 /// invisible to EVERYTHING outside of the HSM as a whole
-pub(crate) struct LightHsmData {
+pub struct LightHsmData {
     /// 0 = off, 100 = on
-    light_percentage: u8,
+    /// Again...leaking this is a bad idea. It is only done here for testing/asserting
+    pub (crate) light_percentage: u8,
 }
 
 impl LightHsmData {
