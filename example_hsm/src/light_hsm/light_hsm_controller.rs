@@ -34,22 +34,26 @@ impl LightControllerHsm {
 
         let top_state = LightStateTop::new(light_hsm.borrow().get_hsm());
 
-        let state_on = LightStateOn::new(
+        // Both on and off leverage similar behavior to dimmer in most cases!
+        // the non-shared behavior they impl for themselves!
+        // Hence dimmer is their parent.
+        let state_dimmer = LightStateDimmer::new(
             top_state.clone(),
+            light_hsm.borrow().get_hsm(),
+            shared_data.clone(),
+        );
+
+        let state_on = LightStateOn::new(
+            state_dimmer.clone(),
             light_hsm.borrow().get_hsm(),
             shared_data.clone(),
         );
 
         let state_off = LightStateOff::new(
-            top_state.clone(),
+            state_dimmer.clone(),
             light_hsm.borrow().get_hsm(),
             shared_data.clone(),
         );
-
-        // on is parent of dimmer - dimmer inherits most of on's behavior,
-        // BUT has some extra behavior special to itself
-        let state_dimmer =
-            LightStateDimmer::new(state_on.clone(), light_hsm.borrow().get_hsm(), shared_data);
 
         light_hsm.borrow_mut().add_state(top_state);
         light_hsm.borrow_mut().add_state(state_on);

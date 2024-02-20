@@ -4,10 +4,7 @@ use crate::{
     state::{StateChainOfResponsibility, StateId, StateRef, StatesRefVec},
 };
 
-use std::{
-    cell::RefCell,
-    rc::Rc,
-};
+use std::{cell::RefCell, rc::Rc};
 
 pub type HsmControllerRef = Rc<RefCell<dyn HsmController>>;
 
@@ -122,9 +119,11 @@ pub trait HsmController {
             }
         }
 
-        debug_assert!(found_state.clone().unwrap().borrow().get_state_id() == *state_id,
+        debug_assert!(
+            found_state.clone().unwrap().borrow().get_state_id() == *state_id,
             "Target: {}. retrieved {}",
-            state_id.get_id(), found_state.unwrap().borrow().get_state_id()
+            state_id.get_id(),
+            found_state.unwrap().borrow().get_state_id()
         );
         found_state
     }
@@ -149,7 +148,8 @@ pub trait HsmController {
             return;
         }
 
-        let is_target_current = requested_state_opt.clone().unwrap().get_id() == self.get_current_state().borrow().get_state_id().get_id();
+        let is_target_current = requested_state_opt.clone().unwrap().get_id()
+            == self.get_current_state().borrow().get_state_id().get_id();
 
         // We don't clear requests once completed - requires too much mutable access
         // Just no-op on all subsequent events
@@ -160,8 +160,7 @@ pub trait HsmController {
         let requested_state = requested_state_opt.unwrap();
         let target_state_opt = self.get_state_by_id(&self.get_states(), &requested_state);
 
-        if target_state_opt.is_none()
-        {
+        if target_state_opt.is_none() {
             println!("Requested change state to state id {}! \
                       This is not a valid state id! Most likely your states did not start at 0 or you provided a index to high!",
                 requested_state.get_id()
@@ -260,7 +259,8 @@ pub trait HsmController {
                 self.get_state_change_string().push_str(", ");
             }
 
-            self.get_state_change_string().push_str(format!("{}(EXIT)", current_state_name).as_str());
+            self.get_state_change_string()
+                .push_str(format!("{}(EXIT)", current_state_name).as_str());
             current_state.as_ref().borrow_mut().handle_state_exit();
 
             current_state = opt_parent_state.unwrap();
@@ -286,8 +286,9 @@ pub trait HsmController {
         self.get_state_change_string().push_str("[");
 
         for state_id_to_enter in lca_to_target_path {
-            let state_to_enter: StateRef =
-                self.get_state_by_id(&self.get_states(), &state_id_to_enter).unwrap();
+            let state_to_enter: StateRef = self
+                .get_state_by_id(&self.get_states(), &state_id_to_enter)
+                .unwrap();
             state_to_enter.as_ref().borrow_mut().handle_state_enter();
 
             let state_to_enter_name = state_to_enter.as_ref().borrow().get_state_name().clone();
@@ -302,8 +303,7 @@ pub trait HsmController {
     }
 
     /// Operations to be performed after handling an event, regardless of outcome!
-    fn post_handle_event_operations(&mut self)
-    {
+    fn post_handle_event_operations(&mut self) {
         // Log the current chain and reset the message
         println!("{}", self.get_state_change_string());
         self.get_state_change_string().clear();

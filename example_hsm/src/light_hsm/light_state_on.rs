@@ -39,7 +39,8 @@ impl LightStateOn {
 
     fn handle_turn_off(&mut self) -> bool {
         // TODO - make a macro that takes state data and calls change state for you!
-        self.state_data.submit_state_change_request(LightStates::OFF as u16);
+        self.state_data
+            .submit_state_change_request(LightStates::OFF as u16);
         true
     }
 }
