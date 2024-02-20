@@ -180,16 +180,6 @@ pub trait HsmController {
         let target_state_name = target_state.borrow().get_state_name();
 
         let current_state = self.get_current_state();
-        let current_state_id = current_state.as_ref().borrow().get_state_id().to_owned();
-        let current_state_name = self.get_state_name(&current_state_id).unwrap();
-
-        self.get_state_change_string().push_str(
-            format!(
-                "[handle_state_change({} >> {})]: ",
-                current_state_name, target_state_name
-            )
-            .as_str(),
-        );
 
         let lca_state_id = self
             .find_lca(current_state, target_state.clone())
