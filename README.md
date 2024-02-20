@@ -1,6 +1,7 @@
 # RustHSM
 
-Rust implementation of a Hierarchical State Machine library.
+Rust implementation of a Hierarchical State Machine (HSM).
+It is a library that can be applied to any problem set.
 It breaks the HSM into these notable components:
 
 [HsmController]: ./rust_hsm/src/state_controller_trait.rs
@@ -125,8 +126,8 @@ It doesn't allow it!
 
 Taking it a step further, assume that we found a way around Rust's intrinsic behavior.
 
-* How would could the HSM controller - defined in a library -
-understand the memory layout of ALL possible event's and their arguments?
+* How would / could the HSM controller - defined in a library -
+understand the memory layout of ALL possible consumer's events and their arguments?
 * How would the controller call functions with signatures it does not know?
   * In the case of function pointers/callbacks to handlers.
 
