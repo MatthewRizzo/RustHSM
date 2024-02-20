@@ -12,7 +12,7 @@ It breaks the HSM into these notable components:
    1. Notably there is very little inside the concrete controller, by design!
    2. If you would like to implement a thread safe controller, copy `HSMControllerBase` and implement a different `external_dispatch_into_hsm`!
 3. States which implement the [StateChainOfResponsibility] trait
-   1. Handles flow into/ out of a given state
+   1. Handles flow into / out of a given state
    2. Allows implementers to delegate the handling of their custom enum events within the `handle_event` impl.
 4. Event traits dispatched to the HSM controller: [StateEventsIF]
    1. Your event just needs to implement the trait to slot into the larger system.
@@ -30,8 +30,11 @@ can be consumed!
 
 When events have data, you (the implementer) must manage the memory layout of
 those arguments yourself.
-You have to find a way top serialize/represent that data as a buffer of `[u8]`
+You have to find a way to serialize/represent that data as a buffer of `[u8]`
 That can be understood by [StateEventsIF] and `HsmEvent`.
+
+Some convenient methods might be to use [serde](https://serde.rs/) or protobufs
+to serialize & deserialize at HSM boundaries.
 
 ## StateChainOfResponsibility Details
 
@@ -41,19 +44,24 @@ The controller uses the trait to attempt to handle an event at the current level
 If the event is unhandled for that state (false), it goes up the "chain".
 This "chain" is the hierarchy of states.
 
+This will NOT cause state changes. Just "inherit" behavior from "parent" states.
+
 ## Understanding Change State
 
 The controller always has a "current" state, but in the process of handling
 events, you can inform the controller of a state change request.
 
-This is done indirectly, by requesting a state change with the `ComposableStateData` held by all states.
+This is done indirectly, by requesting a state change with the
+`ComposableStateData` held by all states.
+
+Specifically, the `submit_state_change_request` API exposed by `ComposableStateData`.
 
 Here is an example:
 
 ```Rust
 pub struct FakeState {
     /// All state's that work with the system will need to have a member of type ComposableStateData
-    state_data: ComposableStateData,
+    base_state_data: ComposableStateData,
     shared_data: MyCustomDataStructureSharedAcrossAllStates,
 }
 
@@ -61,7 +69,6 @@ impl StateChainOfResponsibility for FakeState
 {
     fn handle_event(&mut self, event: &dyn StateEventsIF) -> bool {
         let events: FakeEvent = FakeEvent::from(event);
-        // top returns true for all events
         match events {
             FakeEvent::Event1 => self.handle_event1(),
             _ => false,
@@ -72,7 +79,7 @@ impl StateChainOfResponsibility for FakeState
 impl FakeState {
     fn handle_event1() {
         // do some stuff!
-        self.state_data.submit_state_change_request(FakeStateEnum::FakeState2 as u16);
+        self.base_state_data.submit_state_change_request(FakeStateEnum::FakeState2 as u16);
         return true
     }
 }
