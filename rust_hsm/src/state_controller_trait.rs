@@ -140,8 +140,8 @@ pub trait HsmController {
         let requested_state_opt = self
             .get_current_state()
             .borrow_mut()
-            .get_state_data()
-            .get_requested_state_change();
+            .get_state_data_mut()
+            .get_and_reset_requested_state_change();
 
         if requested_state_opt.is_none() {
             self.post_handle_event_operations();

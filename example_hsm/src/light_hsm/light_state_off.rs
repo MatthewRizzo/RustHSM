@@ -62,4 +62,9 @@ impl StateChainOfResponsibility for LightStateOff {
     fn get_state_data(&self) -> &ComposableStateData {
         &self.state_data
     }
+
+    fn get_state_data_mut(&mut self) -> &mut ComposableStateData
+    {
+        &mut self.state_data
+    }
 }

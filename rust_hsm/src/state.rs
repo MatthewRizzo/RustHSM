@@ -60,6 +60,7 @@ pub trait StateChainOfResponsibility {
     fn handle_event(&mut self, event_id: &dyn StateEventsIF) -> bool;
 
     fn get_state_data(&self) -> &ComposableStateData;
+    fn get_state_data_mut(&mut self) -> &mut ComposableStateData;
 
     fn get_state_id(&self) -> StateId {
         self.get_state_data().get_state_id()
@@ -134,8 +135,13 @@ impl ComposableStateData {
         self.parent_state.clone()
     }
 
-    pub(crate) fn get_requested_state_change(&self) -> Option<StateId> {
-        self.requested_state_change.clone()
+    /// Retrieves the requested state change by consuming it! Resets the value.
+    /// This ensures the same change state is not accidentally requested twice
+    /// (i.e. if it is not cleared after it is done)
+    pub(crate) fn get_and_reset_requested_state_change(&mut self) -> Option<StateId> {
+        let state_change = self.requested_state_change.clone();
+        self.requested_state_change = None;
+        state_change
     }
 
     pub fn get_hsm(&self) -> HsmControllerRef {
