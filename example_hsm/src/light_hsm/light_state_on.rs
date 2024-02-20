@@ -1,5 +1,5 @@
 use rust_hsm::{
-    events::{self, HsmEvent, StateEventsIF},
+    events::StateEventsIF,
     state::{ComposableStateData, StateChainOfResponsibility, StateRef},
     state_controller_trait::HsmControllerRef,
 };
@@ -33,25 +33,19 @@ impl LightStateOn {
         }))
     }
 
-    fn handle_toggle(&self) -> bool {
+    fn handle_toggle(&mut self) -> bool {
         self.handle_turn_off()
     }
 
-    fn handle_turn_off(&self) -> bool {
+    fn handle_turn_off(&mut self) -> bool {
         // TODO - make a macro that takes state data and calls change state for you!
-        self.state_data
-            .get_hsm()
-            .borrow_mut()
-            .change_state(LightStates::OFF as u16);
+        self.state_data.submit_state_change_request(LightStates::OFF as u16);
         true
     }
 }
 
 impl StateChainOfResponsibility for LightStateOn {
-    fn handle_event(
-        &mut self,
-        event: &dyn StateEventsIF
-    ) -> bool {
+    fn handle_event(&mut self, event: &dyn StateEventsIF) -> bool {
         let events: LightEvents = LightEvents::from(event);
         // top returns true for all events
         match events {

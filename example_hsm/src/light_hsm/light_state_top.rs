@@ -26,10 +26,7 @@ impl LightStateTop {
 }
 
 impl StateChainOfResponsibility for LightStateTop {
-    fn handle_event(
-        &mut self,
-        event: &dyn StateEventsIF
-    ) -> bool {
+    fn handle_event(&mut self, event: &dyn StateEventsIF) -> bool {
         let events: LightEvents = LightEvents::from(event);
         // top returns true for all events
         match events {

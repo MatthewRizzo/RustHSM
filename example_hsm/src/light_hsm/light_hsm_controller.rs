@@ -1,8 +1,7 @@
 use std::{cell::RefCell, rc::Rc};
 
 use rust_hsm::{
-    state::StateRef,
-    state_controller::DecoratableHSMControllerBase,
+    state::StateRef, state_controller::DecoratableHSMControllerBase,
     state_controller_trait::HsmControllerRef,
 };
 
@@ -81,12 +80,10 @@ impl LightControllerHsm {
         self.hsm.borrow().get_current_state().clone()
     }
 
-    pub fn dispatch_into_hsm(
-        &self,
-        event: LightEvents,
-    ) {
-        self
-            .get_hsm().clone().borrow_mut()
+    pub fn dispatch_into_hsm(&self, event: LightEvents) {
+        self.get_hsm()
+            .clone()
+            .borrow_mut()
             .external_dispatch_into_hsm(&event);
     }
 }

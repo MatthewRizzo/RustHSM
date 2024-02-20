@@ -4,7 +4,7 @@ use std::{cell::RefCell, rc::Rc};
 ///! composable states
 use crate::{
     events::StateEventsIF,
-    state::{StateId, StateRef, StatesRefVec},
+    state::{StateRef, StatesRefVec},
     state_controller_trait::{HsmController, HsmControllerRef},
 };
 
@@ -15,8 +15,6 @@ pub struct DecoratableHSMControllerBase {
     states: StatesRefVec,
     /// Only ever optional before init
     current_state: Option<StateRef>,
-    /// Only set during handle_event if there is a change_state
-    requested_new_state: Option<StateId>,
     /// Used to cache the current known sequence of events
     state_change_string: String,
 }
@@ -27,7 +25,6 @@ impl DecoratableHSMControllerBase {
             hsm_name,
             states: vec![],
             current_state: None,
-            requested_new_state: None,
             state_change_string: String::new(),
         }))
     }
@@ -60,24 +57,12 @@ impl HsmController for DecoratableHSMControllerBase {
         self.current_state = Some(new_current_state)
     }
 
-    fn get_requested_new_state(&self) -> Option<StateId> {
-        self.requested_new_state.clone()
-    }
-
-    fn set_requested_new_state(&mut self, requested_new_state: StateId) {
-        self.requested_new_state = Some(requested_new_state)
-    }
-
     fn get_states(&self) -> StatesRefVec {
         self.states.clone()
     }
 
     fn get_state_change_string(&mut self) -> &mut String {
         &mut self.state_change_string
-    }
-
-    fn clear_requested_new_state(&mut self) {
-        self.requested_new_state = None;
     }
 
     fn get_hsm_name(&self) -> String {

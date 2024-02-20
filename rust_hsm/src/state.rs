@@ -1,10 +1,7 @@
 ///! This file contains the logic for an individual state and how they link together
 use std::{cell::RefCell, rc::Rc};
 
-use crate::{
-    events::StateEventsIF,
-    state_controller_trait::HsmControllerRef,
-};
+use crate::{events::StateEventsIF, state_controller_trait::HsmControllerRef};
 
 #[derive(PartialEq, Clone)]
 pub struct StateId {
@@ -60,10 +57,7 @@ pub trait StateChainOfResponsibility {
     /// # Return
     /// * True if handled. Do not keep handling
     /// * False if not handled and should be delegated to a higher state.
-    fn handle_event(
-        &mut self,
-        event_id: &dyn StateEventsIF,
-    ) -> bool;
+    fn handle_event(&mut self, event_id: &dyn StateEventsIF) -> bool;
 
     fn get_state_data(&self) -> &ComposableStateData;
 
@@ -109,6 +103,7 @@ pub struct ComposableStateData {
     state_name: String,
     parent_state: Option<StateRef>,
     state_machine: HsmControllerRef,
+    requested_state_change: Option<StateId>,
 }
 
 impl ComposableStateData {
@@ -123,6 +118,7 @@ impl ComposableStateData {
             state_name,
             parent_state,
             state_machine,
+            requested_state_change: None,
         }
     }
 
@@ -138,8 +134,29 @@ impl ComposableStateData {
         self.parent_state.clone()
     }
 
+    pub(crate) fn get_requested_state_change(&self) -> Option<StateId> {
+        self.requested_state_change.clone()
+    }
+
     pub fn get_hsm(&self) -> HsmControllerRef {
         self.state_machine.clone()
+    }
+
+    /// Stores the requested state change.
+    /// The controller will reap the new value once done with its current processing.
+    /// Afterwards, this value will be reset.
+    /// # Why
+    /// The request cannot be submit directly to the controller.
+    /// Complicated reason that simplifies to: triggering an event in the controller causes
+    /// it to be borrowed mutably.
+    /// Likewise, updating the hsm cache to have a new state requires a mutable borrow.
+    /// If change state was submit to the controller directly,
+    /// the state dispatched to would borrow the controller AGAIN causing a panic.
+    /// Instead, indirectly submit the request to the data cache (even if borrowed it is dropped immediately).
+    /// Then have the controller "reap" the results of the change request once it is done handling
+    /// the event; no extra borrows required.
+    pub fn submit_state_change_request(&mut self, new_state: u16) {
+        self.requested_state_change = Some(StateId::new(new_state));
     }
 }
 

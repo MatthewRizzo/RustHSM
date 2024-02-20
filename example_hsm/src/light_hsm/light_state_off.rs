@@ -33,25 +33,18 @@ impl LightStateOff {
         }))
     }
 
-    fn handle_toggle(&self) -> bool {
+    fn handle_toggle(&mut self) -> bool {
         self.handle_turn_on()
     }
 
-    fn handle_turn_on(&self) -> bool {
-        // TODO - make a macro that takes state data and calls change state for you!
-        self.state_data
-            .get_hsm()
-            .borrow_mut()
-            .change_state(LightStates::ON as u16);
+    fn handle_turn_on(&mut self) -> bool {
+        self.state_data.submit_state_change_request(LightStates::ON as u16);
         true
     }
 }
 
 impl StateChainOfResponsibility for LightStateOff {
-    fn handle_event(
-        &mut self,
-        event: &dyn StateEventsIF
-    ) -> bool {
+    fn handle_event(&mut self, event: &dyn StateEventsIF) -> bool {
         let events: LightEvents = LightEvents::from(event);
         // top returns true for all events
         match events {

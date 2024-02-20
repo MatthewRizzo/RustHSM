@@ -1,7 +1,7 @@
 use crate::{
     errors::{HSMError, HSMResult},
     events::StateEventsIF,
-    state::{StateId, StateRef, StatesRefVec},
+    state::{StateChainOfResponsibility, StateId, StateRef, StatesRefVec},
 };
 
 use std::{
@@ -48,91 +48,32 @@ pub trait HsmController {
     /// If there is complicated threading between consumers and this HSM,
     /// override this function to navigate the ITC between them.
     // fn external_dispatch_into_hsm(&mut self, event: &dyn StateEventsIF);
-    fn external_dispatch_into_hsm(
-        &mut self,
-        event: &dyn StateEventsIF,
-    );
+    fn external_dispatch_into_hsm(&mut self, event: &dyn StateEventsIF);
 
     fn add_state(&mut self, new_state: StateRef);
     fn get_current_state(&self) -> StateRef;
     fn set_current_state(&mut self, new_current_state: StateRef);
     fn get_states(&self) -> StatesRefVec;
-    fn get_requested_new_state(&self) -> Option<StateId>;
-    fn set_requested_new_state(&mut self, requested_new_state: StateId);
-    fn clear_requested_new_state(&mut self);
     fn get_state_change_string(&mut self) -> &mut String;
     fn get_hsm_name(&self) -> String;
-
-    /// Changes the state. Will IMMEDIATELY go to the LCA state, but will NOT
-    /// go to target state until AFTER the handling of the current event that
-    /// triggered the change_state
-    fn change_state(&mut self, target_state_id: u16) {
-        let target_state = StateId::new(target_state_id);
-        let target_state_name = self.get_state_name(&target_state);
-
-        assert!(
-            target_state_name.is_some(),
-            "change_state: Target state provided with id ({}) is invalid!",
-            target_state.get_id()
-        );
-        debug_assert!(
-            self.get_requested_new_state().is_none(),
-            "change_state: A new state cannot be requested if another already is!"
-        );
-
-        let current_state = self.get_current_state();
-        let current_state_id = current_state.as_ref().borrow().get_state_id().to_owned();
-        let current_state_name = self.get_state_name(&current_state_id).unwrap();
-
-        self.get_state_change_string().push_str(
-            format!(
-                "[change_state({} >> {} )",
-                current_state_name,
-                target_state_name.unwrap()
-            )
-            .as_str(),
-        );
-
-        if self.get_requested_new_state().is_none() {
-            println!(
-                "{}] - ILLEGAL NESTED STATE CHANGE IGNORED!",
-                self.get_state_change_string()
-            );
-            return;
-        }
-
-        let target_state_ref: StateRef = self.get_state_by_id(&self.get_states(), &target_state);
-        let lca_state_id = self
-            .find_lca(current_state, target_state_ref)
-            .expect(format!("Error finding lca for {} ", self.get_state_change_string()).as_str());
-
-        self.exit_states_until_target(lca_state_id);
-
-        // Alerts handle_change_state to do work at the end of handle
-        self.set_requested_new_state(target_state);
-    }
 
     /// Send an event into the HSM from within the HSM.
     /// i.e. a state fires an event while handling another event
     // fn handle_event(&mut self, event: &dyn StateEventsIF) {
-    fn handle_event(
-        &mut self,
-        event: &dyn StateEventsIF,
-    ) {
+    fn handle_event(&mut self, event: &dyn StateEventsIF) {
         // keep going until event is handled (true) or we reach the end
         let mut current_state = self.get_current_state();
 
         let hsm_name = self.get_hsm_name();
 
-        let current_handle_string = self.get_state_change_string().clone();
         self.get_state_change_string().clear();
 
         self.get_state_change_string().push_str(
             format!(
-                "{}: ({}) >> {}",
+                "{}: {}({}): ",
                 hsm_name,
-                current_handle_string,
-                current_state.borrow().get_state_name()
+                current_state.borrow().get_state_name(),
+                event.get_event_name()
             )
             .as_str(),
         );
@@ -144,9 +85,7 @@ pub trait HsmController {
                 break;
             }
 
-            let is_handled = current_state
-                .borrow_mut()
-                .handle_event(event);
+            let is_handled = current_state.borrow_mut().handle_event(event);
 
             if is_handled {
                 // event has been handled!
@@ -159,6 +98,8 @@ pub trait HsmController {
             // See if parent state handles this
             current_state = next_state.unwrap();
         }
+
+        // Check if a state change was requested on state data cache while processing.
         self.handle_state_change();
     }
 
@@ -173,51 +114,95 @@ pub trait HsmController {
     }
 
     /// Precondition - the state id is valid!
-    /// todo - make this self if possible
-    fn get_state_by_id(&self, states: &StatesRefVec, state_id: &StateId) -> StateRef {
-        states.get(*state_id.get_id() as usize).unwrap().clone()
+    /// Can't use indices because some consumers might not start states at 0
+    fn get_state_by_id(&self, states: &StatesRefVec, state_id: &StateId) -> Option<StateRef> {
+        // let state = states.get(*state_id.get_id() as usize).unwrap().clone();
+        let mut found_state: Option<StateRef> = None;
+        for state in states {
+            if &state.borrow().get_state_id() == state_id {
+                found_state = Some(state.clone());
+                break;
+            }
+        }
+
+        debug_assert!(found_state.clone().unwrap().borrow().get_state_id() == *state_id,
+            "Target: {}. retrieved {}",
+            state_id.get_id(), found_state.unwrap().borrow().get_state_id()
+        );
+        found_state
     }
 
+    /// # Brief
+    /// Check if a state change was requested on state data cache while processing
+    /// # Details
     /// Check if a change state was enqueued while processing an event.
-    /// Given that change_state exits all states up-to-but-not-including lca,
-    /// enter the LCA state and then all sub-state's (including the target state).
-    /// Only then do we START the target state
+    /// If there is, exit all states from [current->LCA) and enter (LCA->target]
+    /// THEN handle start on target.
+    /// # NOTE
+    /// CHANGE STATES ARE ENQUEUED BY ComposableStateData::submit_state_change_request
     fn handle_state_change(&mut self) {
-        if self.get_requested_new_state().is_none() {
-            println!("{}", self.get_state_change_string());
-            self.get_state_change_string().clear();
-            self.clear_requested_new_state();
+        let requested_state_opt = self
+            .get_current_state()
+            .borrow_mut()
+            .get_state_data()
+            .get_requested_state_change();
+
+        let is_target_current = requested_state_opt.clone().unwrap().get_id() == self.get_current_state().borrow().get_state_id().get_id();
+
+        if requested_state_opt.is_none() {
+            self.post_handle_event_operations();
+            return;
+        }
+        // We don't clear requests once completed - requires too much mutable access
+        // Just no-op on all subsequent events
+        else if is_target_current {
+            self.post_handle_event_operations();
+        }
+
+        let requested_state = requested_state_opt.unwrap();
+        let target_state_opt = self.get_state_by_id(&self.get_states(), &requested_state);
+
+        if target_state_opt.is_none()
+        {
+            println!("Requested change state to state id {}! \
+                      This is not a valid state id! Most likely your states did not start at 0 or you provided a index to high!",
+                requested_state.get_id()
+            );
+            self.post_handle_event_operations();
             return;
         }
 
-        let target_state =
-            self.get_state_by_id(&self.get_states(), &self.get_requested_new_state().unwrap());
-        let target_to_lca_path = target_state.borrow().get_path_to_root_state();
+        let target_state = target_state_opt.unwrap();
 
-        self.get_state_change_string().push_str("[");
+        assert!(
+            requested_state.get_id().clone() < self.get_states().len() as u16,
+            "State with id {} invalid! ",
+            requested_state.get_id()
+        );
 
-        for state_id_to_enter in target_to_lca_path.into_iter().rev() {
-            let state_to_enter: StateRef =
-                self.get_state_by_id(&self.get_states(), &state_id_to_enter);
-            state_to_enter.as_ref().borrow_mut().handle_state_enter();
+        let target_state_name = target_state.borrow().get_state_name();
 
-            let state_to_enter_name = state_to_enter.as_ref().borrow().get_state_name().clone();
-            self.get_state_change_string()
-                .push_str(format!("{}(ENTER)", state_to_enter_name).as_str());
-        }
+        let current_state = self.get_current_state();
+        let current_state_id = current_state.as_ref().borrow().get_state_id().to_owned();
+        let current_state_name = self.get_state_name(&current_state_id).unwrap();
 
-        // Start the target state!
-        target_state.as_ref().borrow_mut().handle_state_start();
-        let target_state_name = target_state.as_ref().borrow().get_state_name().clone();
-        self.get_state_change_string()
-            .push_str(format!("{}(START)]", target_state_name).as_str());
+        self.get_state_change_string().push_str(
+            format!(
+                "[handle_state_change({} >> {})]: ",
+                current_state_name, target_state_name
+            )
+            .as_str(),
+        );
 
-        // todo add tracing logic showing the full path!
+        let lca_state_id = self
+            .find_lca(current_state, target_state.clone())
+            .expect(format!("Error finding lca for {} ", self.get_state_change_string()).as_str());
 
-        // Log the current chain and reset the message
-        println!("{}", self.get_state_change_string());
-        self.get_state_change_string().clear();
-        self.clear_requested_new_state();
+        self.exit_states_until_target(lca_state_id);
+        self.enter_states_lca_to_target(target_state.clone(), target_state_name);
+
+        self.post_handle_event_operations();
+        self.set_current_state(target_state);
     }
 
     /// get LCA between current state and other state
@@ -258,6 +243,9 @@ pub trait HsmController {
     fn exit_states_until_target(&mut self, target_state_id: StateId) {
         let mut current_state = self.get_current_state();
 
+        let mut exited_first_state = false;
+        self.get_state_change_string().push_str("[");
+
         loop {
             let opt_parent_state = current_state.borrow().get_super_state();
             // this should only happen if we reach top
@@ -269,9 +257,57 @@ pub trait HsmController {
                 break;
             }
 
+            let current_state_name = current_state.borrow().get_state_name();
+            if exited_first_state {
+                self.get_state_change_string().push_str(", ");
+            }
+
+            self.get_state_change_string().push_str(format!("{}(EXIT)", current_state_name).as_str());
             current_state.as_ref().borrow_mut().handle_state_exit();
 
             current_state = opt_parent_state.unwrap();
+            exited_first_state = true;
         }
+
+        self.get_state_change_string().push_str("], ");
+    }
+
+    /// Assumes we have already exited all states (non-inclusive) to the LCA
+    /// Starts the target state
+    fn enter_states_lca_to_target(
+        &mut self,
+        target_state: Rc<RefCell<dyn StateChainOfResponsibility>>,
+        target_state_name: String,
+    ) {
+        let target_to_lca_path = target_state.borrow().get_path_to_root_state();
+
+        // Do NOT include the LCA in the Enter's
+        let mut lca_to_target_path = target_to_lca_path.into_iter().rev();
+        lca_to_target_path.next();
+
+        self.get_state_change_string().push_str("[");
+
+        for state_id_to_enter in lca_to_target_path {
+            let state_to_enter: StateRef =
+                self.get_state_by_id(&self.get_states(), &state_id_to_enter).unwrap();
+            state_to_enter.as_ref().borrow_mut().handle_state_enter();
+
+            let state_to_enter_name = state_to_enter.as_ref().borrow().get_state_name().clone();
+            self.get_state_change_string()
+                .push_str(format!("{}(ENTER), ", state_to_enter_name).as_str());
+        }
+
+        // Start the target state!
+        target_state.as_ref().borrow_mut().handle_state_start();
+        self.get_state_change_string()
+            .push_str(format!("{}(START)]", target_state_name).as_str());
+    }
+
+    /// Operations to be performed after handling an event, regardless of outcome!
+    fn post_handle_event_operations(&mut self)
+    {
+        // Log the current chain and reset the message
+        println!("{}", self.get_state_change_string());
+        self.get_state_change_string().clear();
     }
 }
