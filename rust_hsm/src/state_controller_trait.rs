@@ -70,7 +70,7 @@ pub trait HsmController {
                 "{}: {}({}): ",
                 hsm_name,
                 current_state.borrow().get_state_name(),
-                event.get_event_name()
+                event
             )
             .as_str(),
         );

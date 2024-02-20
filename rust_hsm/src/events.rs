@@ -4,6 +4,17 @@ use core::fmt;
 /// Abstracts common functionality for all state events into the trait.
 /// Makes impl of actual enum's easier.
 /// You will have to hand-roll the conversion from IF -> concrete enum
+/// # Implementing Display
+/// This is important for logging of events and how they cause state transitions!
+/// The typical format for the write!() should be
+/// ```rust
+///     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+///         match self {
+///             Self::Evt1 => write!(f, "Evt1"),
+///             Self::EvtWithArgs(args) => write!(f, "EvtWithArgs(formatted_args)"),
+///         }
+///     }
+/// ```
 pub trait StateEventsIF: fmt::Display {
     /// Converts the known-event-enum into the concrete event struct
     fn to_event_base(&self) -> HsmEvent;
