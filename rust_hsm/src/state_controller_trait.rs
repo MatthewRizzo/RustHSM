@@ -1,12 +1,10 @@
 use crate::{
     errors::{HSMError, HSMResult},
-    events::StateEventsIF,
+    events::{StateEventVec, StateEventsIF},
     state::{StateChainOfResponsibility, StateId, StateRef, StatesRefVec},
 };
 
 use std::{cell::RefCell, rc::Rc};
-
-pub type HsmControllerRef = Rc<RefCell<dyn HsmController>>;
 
 /// The traits required to be a proper HSM controller
 /// Everything is implemented for consumers.
@@ -23,36 +21,19 @@ pub type HsmControllerRef = Rc<RefCell<dyn HsmController>>;
 ///     * get_state_change_string
 ///     * clear_requested_new_state
 /// # Non Trivial functions to implement (even if the trivial ones are done right)
-///     * external_dispatch_into_hsm: requires an understanding of how your system behaves
+///     * dispatch_event: requires an understanding of how your system behaves
 pub trait HsmController {
-    fn init(&mut self, initial_state: StateRef) -> HSMResult<()> {
-        let initial_state_id = initial_state.borrow().get_state_id();
-        let states = self.get_states();
-        if *initial_state_id.get_id() as usize >= states.len() {
-            return Err(HSMError::InvalidStateId(format!(
-                "Initial State with Id {} is not valid. There are only {} states!",
-                *initial_state_id.get_id(),
-                states.len() - 1
-            )));
-        }
-
-        self.set_current_state(initial_state);
-
-        Ok(())
-    }
-
     /// Fire an event external to the HSM into it and see how it gets handled.
     /// If there is complicated threading between consumers and this HSM,
     /// override this function to navigate the ITC between them.
-    // fn external_dispatch_into_hsm(&mut self, event: &dyn StateEventsIF);
-    fn external_dispatch_into_hsm(&mut self, event: &dyn StateEventsIF);
+    fn dispatch_event(&mut self, event: &dyn StateEventsIF);
 
-    fn add_state(&mut self, new_state: StateRef);
     fn get_current_state(&self) -> StateRef;
     fn set_current_state(&mut self, new_current_state: StateRef);
     fn get_states(&self) -> StatesRefVec;
     fn get_state_change_string(&mut self) -> &mut String;
     fn get_hsm_name(&self) -> String;
+    fn append_to_follow_up_events(&mut self, new_follow_up_events: &mut StateEventVec);
 
     /// Send an event into the HSM from within the HSM.
     /// i.e. a state fires an event while handling another event
@@ -62,9 +43,7 @@ pub trait HsmController {
         let mut current_state = self.get_current_state();
 
         let hsm_name = self.get_hsm_name();
-
         self.get_state_change_string().clear();
-
         self.get_state_change_string().push_str(
             format!(
                 "{}: {}({}): ",
@@ -75,26 +54,57 @@ pub trait HsmController {
             .as_str(),
         );
 
+        let mut requested_state_change: Option<StateId> = None;
+
         loop {
-            let next_state = current_state.borrow().get_super_state();
-
-            if next_state.is_none() {
-                break;
-            }
-
             let is_handled = current_state.borrow_mut().handle_event(event);
+
+            let local_requested_state_change = current_state
+                .borrow_mut()
+                .get_state_data_mut()
+                .get_and_reset_requested_state_change();
+
+            let nested_change_requested = local_requested_state_change.is_some() && requested_state_change.is_some();
+            assert!(
+                !nested_change_requested,
+                "Requested state change to {} but a change to {} was already requested! Illegal nested state change!",
+                local_requested_state_change.unwrap(),
+                requested_state_change.unwrap()
+            );
+
+            requested_state_change = local_requested_state_change;
 
             if is_handled {
                 // event has been handled!
                 break;
             }
 
-            // See if parent state handles this
+            let next_state = current_state.borrow().get_super_state();
+            if next_state.is_none() {
+                break;
+            }
+
+            // Maybe the parent state handles this
             current_state = next_state.unwrap();
         }
 
+        // Cache the follow up events before we change state
+        // The events will have been set by the chain of handle_events
+        let mut follow_up_events = current_state.borrow_mut().get_and_reset_follow_up_events();
+
         // Check if a state change was requested on state data cache while processing.
-        self.handle_state_change();
+        self.handle_state_change(requested_state_change);
+
+        // At this point, the state has changed
+
+        if let Some(next_event) = follow_up_events.pop_back() {
+            self.handle_event(next_event.as_ref());
+            for follow_up_event in follow_up_events {
+                self.get_current_state()
+                    .borrow_mut()
+                    .dispatch_internally(follow_up_event)
+            }
+        }
     }
 
     fn get_state_name(&self, state_id: &StateId) -> Option<String> {
@@ -136,19 +146,13 @@ pub trait HsmController {
     /// THEN handle start on target.
     /// # NOTE
     /// CHANGE STATES ARE ENQUEUED BY ComposableStateData::submit_state_change_request
-    fn handle_state_change(&mut self) {
-        let requested_state_opt = self
-            .get_current_state()
-            .borrow_mut()
-            .get_state_data_mut()
-            .get_and_reset_requested_state_change();
-
-        if requested_state_opt.is_none() {
+    fn handle_state_change(&mut self, requested_state_change: Option<StateId>) {
+        if requested_state_change.is_none() {
             self.post_handle_event_operations();
             return;
         }
 
-        let is_target_current = requested_state_opt.clone().unwrap().get_id()
+        let is_target_current = requested_state_change.clone().unwrap().get_id()
             == self.get_current_state().borrow().get_state_id().get_id();
 
         // We don't clear requests once completed - requires too much mutable access
@@ -157,7 +161,7 @@ pub trait HsmController {
             self.post_handle_event_operations();
         }
 
-        let requested_state = requested_state_opt.unwrap();
+        let requested_state = requested_state_change.unwrap();
         let target_state_opt = self.get_state_by_id(&self.get_states(), &requested_state);
 
         if target_state_opt.is_none() {

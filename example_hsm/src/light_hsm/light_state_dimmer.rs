@@ -1,7 +1,6 @@
 use rust_hsm::{
     events::StateEventsIF,
     state::{ComposableStateData, StateChainOfResponsibility, StateRef},
-    state_controller_trait::HsmControllerRef,
 };
 
 use crate::{
@@ -17,16 +16,11 @@ pub(crate) struct LightStateDimmer {
 }
 
 impl LightStateDimmer {
-    pub fn new(
-        parent_state: StateRef,
-        hsm: HsmControllerRef,
-        shared_data: LightHsmDataRef,
-    ) -> Rc<RefCell<Self>> {
+    pub fn new(parent_state: StateRef, shared_data: LightHsmDataRef) -> Rc<RefCell<Self>> {
         let state_data = ComposableStateData::new(
             LightStates::DIMMER as u16,
             "LightStateDimmer".to_string(),
             Some(parent_state),
-            hsm,
         );
 
         Rc::new(RefCell::new(Self {
@@ -36,6 +30,11 @@ impl LightStateDimmer {
     }
 
     fn set_to_percentage(&mut self, percentage: u8) -> bool {
+        if percentage == 0 {
+            self.dispatch_internally(Rc::new(LightEvents::TurnOff));
+        } else if percentage >= 100 {
+            self.dispatch_internally(Rc::new(LightEvents::TurnOn));
+        }
         self.shared_data.borrow_mut().set_lighting(percentage)
     }
 
@@ -59,6 +58,8 @@ impl StateChainOfResponsibility for LightStateDimmer {
             LightEvents::IncreaseByPercent(percentage) => {
                 self.set_relative(LightAdjustment::Increase, percentage)
             }
+            // TurnOff and Toggle are implemented by our parent (LightStateOn)
+            // Leverage that behavior by not handling them
             _ => false,
         }
     }
@@ -67,8 +68,7 @@ impl StateChainOfResponsibility for LightStateDimmer {
         &self.state_data
     }
 
-    fn get_state_data_mut(&mut self) -> &mut ComposableStateData
-    {
+    fn get_state_data_mut(&mut self) -> &mut ComposableStateData {
         &mut self.state_data
     }
 }
