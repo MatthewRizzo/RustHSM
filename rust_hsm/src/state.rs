@@ -139,9 +139,7 @@ impl ComposableStateData {
     /// This ensures the same change state is not accidentally requested twice
     /// (i.e. if it is not cleared after it is done)
     pub(crate) fn get_and_reset_requested_state_change(&mut self) -> Option<StateId> {
-        let state_change = self.requested_state_change.clone();
-        self.requested_state_change = None;
-        state_change
+        self.requested_state_change.take()
     }
 
     pub fn get_hsm(&self) -> HsmControllerRef {

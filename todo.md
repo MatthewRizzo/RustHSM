@@ -6,9 +6,9 @@ Main Aims:
 * Reduce complexity of data structures
 * Cleanup any bugs
 
-## Action Items
+## Action Items (AI)
 
-1. [ ] Use swap to replace change state request in `get_and_reset_requested_state_change`
+1. [x] Use swap to replace change state request in `get_and_reset_requested_state_change`
 2. [ ] Remove controller from states
    1. Kind of gross that it is there right now. Not sure if used.
 3. [ ] Move `requested_state_change` API to `StateChainOfResponsibility` instead of `ComposableStateData`
