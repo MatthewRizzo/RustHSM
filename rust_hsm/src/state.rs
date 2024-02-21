@@ -1,7 +1,7 @@
 ///! This file contains the logic for an individual state and how they link together
 use std::{cell::RefCell, rc::Rc};
 
-use crate::{events::StateEventsIF, state_controller_trait::HsmControllerRef};
+use crate::events::StateEventsIF;
 
 #[derive(PartialEq, Clone)]
 pub struct StateId {
@@ -74,10 +74,6 @@ pub trait StateChainOfResponsibility {
         self.get_state_data().get_state_name()
     }
 
-    fn get_hsm(&self) -> HsmControllerRef {
-        self.get_state_data().get_hsm()
-    }
-
     /// Gets the path to root. Including self and root.
     fn get_path_to_root_state(&self) -> Vec<StateId> {
         let mut path_to_root = Vec::<StateId>::new();
@@ -103,22 +99,15 @@ pub struct ComposableStateData {
     // None if there is no parent state (i.e. TOP state)
     state_name: String,
     parent_state: Option<StateRef>,
-    state_machine: HsmControllerRef,
     requested_state_change: Option<StateId>,
 }
 
 impl ComposableStateData {
-    pub fn new(
-        state_id: u16,
-        state_name: String,
-        parent_state: Option<StateRef>,
-        state_machine: HsmControllerRef,
-    ) -> Self {
+    pub fn new(state_id: u16, state_name: String, parent_state: Option<StateRef>) -> Self {
         Self {
             state_id: StateId::new(state_id),
             state_name,
             parent_state,
-            state_machine,
             requested_state_change: None,
         }
     }
@@ -142,10 +131,6 @@ impl ComposableStateData {
         let state_change = self.requested_state_change.clone();
         self.requested_state_change = None;
         state_change
-    }
-
-    pub fn get_hsm(&self) -> HsmControllerRef {
-        self.state_machine.clone()
     }
 
     /// Stores the requested state change.
