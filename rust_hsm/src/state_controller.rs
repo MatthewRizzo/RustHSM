@@ -2,10 +2,12 @@
 ///! composable states
 use crate::{
     errors::{HSMError, HSMResult},
-    events::StateEventsIF,
+    events::{StateEventVec, StateEventsIF},
     state::{StateRef, StatesRefVec},
     state_controller_trait::HsmController,
 };
+
+use std::collections::VecDeque;
 
 /// Compose / decorate your hsm controller with this
 pub struct HSMControllerBase {
@@ -16,6 +18,7 @@ pub struct HSMControllerBase {
     current_state: Option<StateRef>,
     /// Used to cache the current known sequence of events
     state_change_string: String,
+    follow_up_events_requested: StateEventVec,
 }
 
 impl HSMControllerBase {
@@ -27,12 +30,13 @@ impl HSMControllerBase {
             states: vec![],
             current_state: None,
             state_change_string: String::new(),
+            follow_up_events_requested: VecDeque::new(),
         }
     }
 }
 
 impl HsmController for HSMControllerBase {
-    fn external_dispatch_into_hsm(&mut self, event: &dyn StateEventsIF) {
+    fn dispatch_event(&mut self, event: &dyn StateEventsIF) {
         // Override for a more custom implementation
         self.handle_event(event)
     }
@@ -48,6 +52,10 @@ impl HsmController for HSMControllerBase {
             .clone()
             .expect("HSM not initialized! Make sure to call Init before using state-related API's!")
             .clone()
+    }
+
+    fn append_to_follow_up_events(&mut self, new_follow_up_events: &mut StateEventVec) {
+        self.follow_up_events_requested.append(new_follow_up_events);
     }
 
     fn set_current_state(&mut self, new_current_state: StateRef) {
@@ -75,12 +83,6 @@ pub struct HsmControllerBuilder {
 
 impl HsmControllerBuilder {
     pub fn new(hsm_name: String) -> HsmControllerBuilder {
-        // let controller = HSMControllerBase {
-        //     hsm_name,
-        //     states: vec![],
-        //     current_state: None,
-        //     state_change_string: String::new(),
-        // };
         let controller = HSMControllerBase::new(hsm_name);
 
         HsmControllerBuilder {
@@ -99,13 +101,16 @@ impl HsmControllerBuilder {
     pub fn init(mut self, initial_state: StateRef) -> HSMResult<HSMControllerBase> {
         let initial_state_id = initial_state.borrow().get_state_id();
         let states = self.controller_under_construction.get_states();
-        if *initial_state_id.get_id() as usize >= states.len() {
-            return Err(HSMError::InvalidStateId(format!(
-                "Initial State with Id {} is not valid. There are only {} states!",
-                *initial_state_id.get_id(),
-                states.len() - 1
-            )));
-        }
+
+        states
+            .iter()
+            .find(|state| state.borrow().get_state_id() == initial_state_id)
+            .ok_or_else(|| {
+                HSMError::InvalidStateId(format!(
+                    "Initial State with Id {} is not valid. There are no added states with that id",
+                    *initial_state_id.get_id()
+                ))
+            })?;
 
         self.controller_under_construction
             .set_current_state(initial_state);

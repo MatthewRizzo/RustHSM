@@ -30,6 +30,11 @@ impl LightStateDimmer {
     }
 
     fn set_to_percentage(&mut self, percentage: u8) -> bool {
+        if percentage == 0 {
+            self.dispatch_internally(Rc::new(LightEvents::TurnOff));
+        } else if percentage >= 100 {
+            self.dispatch_internally(Rc::new(LightEvents::TurnOn));
+        }
         self.shared_data.borrow_mut().set_lighting(percentage)
     }
 
@@ -53,6 +58,8 @@ impl StateChainOfResponsibility for LightStateDimmer {
             LightEvents::IncreaseByPercent(percentage) => {
                 self.set_relative(LightAdjustment::Increase, percentage)
             }
+            // TurnOff and Toggle are implemented by our parent (LightStateOn)
+            // Leverage that behavior by not handling them
             _ => false,
         }
     }

@@ -1,5 +1,6 @@
 use rust_hsm::{
-    state::StateRef, state_controller::{HSMControllerBase, HsmControllerBuilder},
+    state::StateRef,
+    state_controller::{HSMControllerBase, HsmControllerBuilder},
     state_controller_trait::HsmController,
 };
 
@@ -24,20 +25,19 @@ impl LightControllerHsm {
 
         let top_state = LightStateTop::new();
 
-        // Both on and off leverage similar behavior to dimmer in most cases!
+        // dimmer leverage's similar behavior to on in most cases!
         // the non-shared behavior they impl for themselves!
-        // Hence dimmer is their parent.
-        let state_dimmer = LightStateDimmer::new(top_state.clone(), shared_data.clone());
-        let state_on = LightStateOn::new(state_dimmer.clone(), shared_data.clone());
-        let state_off = LightStateOff::new(state_dimmer.clone(), shared_data.clone());
+        // Hence on is dimmer's parent.
+        let state_on = LightStateOn::new(top_state.clone(), shared_data.clone());
+        let state_dimmer = LightStateDimmer::new(state_on.clone(), shared_data.clone());
+        let state_off = LightStateOff::new(top_state.clone(), shared_data.clone());
 
         let hsm = HsmControllerBuilder::new("LightControllerHsm".to_string())
             .add_state(top_state)
             .add_state(state_on)
             .add_state(state_off.clone())
-            .add_state(state_dimmer)
-            // Start the light "off"
-            .init(state_off)
+            .add_state(state_dimmer.clone())
+            .init(state_dimmer)
             .unwrap();
 
         let light_hsm = LightControllerHsm {
@@ -54,7 +54,7 @@ impl LightControllerHsm {
     }
 
     pub fn dispatch_into_hsm(&mut self, event: LightEvents) {
-        self.hsm.external_dispatch_into_hsm(&event)
+        self.hsm.dispatch_event(&event)
     }
 
     /// In a real HSM this is a BAD idea. DO NOT LEAK the data

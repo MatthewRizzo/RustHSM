@@ -1,7 +1,7 @@
 ///! This file contains the logic for an individual state and how they link together
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 
-use crate::events::StateEventsIF;
+use crate::events::{StateEventRef, StateEventsIF};
 
 #[derive(PartialEq, Clone)]
 pub struct StateId {
@@ -90,6 +90,22 @@ pub trait StateChainOfResponsibility {
 
         path_to_root
     }
+
+    /// Retrieves the next event requested for processing by consuming it!
+    /// This ensures the same event is not accidentally performed twice.
+    /// No-op if there are no follow-up / requested events!
+    /// Similar to the data structure API but exposes to controller trait!
+    fn get_and_reset_follow_up_events(&mut self) -> VecDeque<StateEventRef> {
+        self.get_state_data_mut().get_and_reset_follow_up_events()
+    }
+
+    /// Dispatches another event to the controller from an internal state.
+    /// Allows a state to fire into the controller (i.e. a timer expires).
+    /// Will append to list of other events dispatched internal
+    fn dispatch_internally(&mut self, follow_up_event: StateEventRef) {
+        self.get_state_data_mut()
+            .internal_event_dispatch(follow_up_event);
+    }
 }
 
 // Base state struct your actual state's should be composed of
@@ -100,6 +116,7 @@ pub struct ComposableStateData {
     state_name: String,
     parent_state: Option<StateRef>,
     requested_state_change: Option<StateId>,
+    follow_up_events_requested: VecDeque<StateEventRef>,
 }
 
 impl ComposableStateData {
@@ -109,6 +126,7 @@ impl ComposableStateData {
             state_name,
             parent_state,
             requested_state_change: None,
+            follow_up_events_requested: VecDeque::new(),
         }
     }
 
@@ -133,6 +151,15 @@ impl ComposableStateData {
         state_change
     }
 
+    /// Retrieves the next event requested for processing by consuming it!
+    /// This ensures the same event is not accidentally performed twice.
+    /// No-op if there are no follow-up / requested events!
+    pub(crate) fn get_and_reset_follow_up_events(&mut self) -> VecDeque<StateEventRef> {
+        let consumed = self.follow_up_events_requested.clone();
+        self.follow_up_events_requested.clear();
+        consumed
+    }
+
     /// Stores the requested state change.
     /// The controller will reap the new value once done with its current processing.
     /// Afterwards, this value will be reset.
@@ -148,6 +175,13 @@ impl ComposableStateData {
     /// the event; no extra borrows required.
     pub fn submit_state_change_request(&mut self, new_state: u16) {
         self.requested_state_change = Some(StateId::new(new_state));
+    }
+
+    /// Used by states to trigger a dispatch into the controller from themselves.
+    /// Will get handled by the HSM after the current event has been run-to-completion.
+    /// For example a timer expiring triggering a timeout event.
+    pub fn internal_event_dispatch(&mut self, event: StateEventRef) {
+        self.follow_up_events_requested.push_back(event)
     }
 }
 
