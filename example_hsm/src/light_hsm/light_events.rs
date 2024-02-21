@@ -54,7 +54,7 @@ impl std::fmt::Display for LightEvents {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             Self::Toggle => write!(f, "Toggle"),
-            Self::Set(value) => write!(f, "Set({value})",),
+            Self::Set(value) => write!(f, "Set({value})", ),
             Self::TurnOff => write!(f, "TurnOff"),
             Self::TurnOn => write!(f, "TurnOn"),
             Self::ReduceByPercent(value) => write!(f, "ReduceByPercent({value}%)"),

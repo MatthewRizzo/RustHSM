@@ -3,6 +3,7 @@ use std::{cell::RefCell, rc::Rc};
 use rust_hsm::{
     events::StateEventsIF,
     state::{ComposableStateData, StateChainOfResponsibility},
+    state_controller_trait::HsmControllerRef,
 };
 
 use crate::{light_events::LightEvents, light_states::LightStates};
@@ -12,9 +13,13 @@ pub struct LightStateTop {
 }
 
 impl LightStateTop {
-    pub fn new() -> Rc<RefCell<Self>> {
-        let data =
-            ComposableStateData::new(LightStates::TOP as u16, "LightStateTop".to_string(), None);
+    pub fn new(hsm: HsmControllerRef) -> Rc<RefCell<Self>> {
+        let data = ComposableStateData::new(
+            LightStates::TOP as u16,
+            "LightStateTop".to_string(),
+            None,
+            hsm,
+        );
 
         Rc::new(RefCell::new(Self { state_data: data }))
     }
@@ -33,7 +38,8 @@ impl StateChainOfResponsibility for LightStateTop {
         &self.state_data
     }
 
-    fn get_state_data_mut(&mut self) -> &mut ComposableStateData {
+    fn get_state_data_mut(&mut self) -> &mut ComposableStateData
+    {
         &mut self.state_data
     }
 }

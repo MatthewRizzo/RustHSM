@@ -1,10 +1,5 @@
 ///! This file contains the logic behind events that can be used by states
 use core::fmt;
-use std::collections::VecDeque;
-use std::rc::Rc;
-
-pub type StateEventRef = Rc<dyn StateEventsIF>;
-pub type StateEventVec = VecDeque<StateEventRef>;
 
 /// Abstracts common functionality for all state events into the trait.
 /// Makes impl of actual enum's easier.

@@ -1,6 +1,7 @@
 use rust_hsm::{
     events::StateEventsIF,
     state::{ComposableStateData, StateChainOfResponsibility, StateRef},
+    state_controller_trait::HsmControllerRef,
 };
 
 use crate::{
@@ -14,11 +15,16 @@ pub(crate) struct LightStateOff {
 }
 
 impl LightStateOff {
-    pub fn new(parent_state: StateRef, shared_data: LightHsmDataRef) -> Rc<RefCell<Self>> {
+    pub fn new(
+        parent_state: StateRef,
+        hsm: HsmControllerRef,
+        shared_data: LightHsmDataRef,
+    ) -> Rc<RefCell<Self>> {
         let state_data = ComposableStateData::new(
             LightStates::OFF as u16,
             "LightStateOff".to_string(),
             Some(parent_state),
+            hsm,
         );
 
         Rc::new(RefCell::new(Self {
@@ -57,7 +63,8 @@ impl StateChainOfResponsibility for LightStateOff {
         &self.state_data
     }
 
-    fn get_state_data_mut(&mut self) -> &mut ComposableStateData {
+    fn get_state_data_mut(&mut self) -> &mut ComposableStateData
+    {
         &mut self.state_data
     }
 }
