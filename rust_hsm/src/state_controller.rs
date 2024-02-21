@@ -20,6 +20,8 @@ pub struct HSMControllerBase {
 }
 
 impl HSMControllerBase {
+    /// Create an HSM controller.
+    // Highly recommend NOT exposing the HSM beyond your container.
     pub fn new(hsm_name: String) -> HsmControllerRef {
         Rc::new(RefCell::new(HSMControllerBase {
             hsm_name,

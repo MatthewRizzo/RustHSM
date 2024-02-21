@@ -25,45 +25,32 @@ impl LightControllerHsm {
 
         // Start the light "off"
         let shared_data = LightHsmData::new(0);
-
-        let light_hsm = Rc::new(RefCell::new(LightControllerHsm {
-            hsm,
-            _shared_data: shared_data.clone(),
-        }));
-
+        
         let top_state = LightStateTop::new();
 
         // Both on and off leverage similar behavior to dimmer in most cases!
         // the non-shared behavior they impl for themselves!
         // Hence dimmer is their parent.
         let state_dimmer = LightStateDimmer::new(top_state.clone(), shared_data.clone());
-
         let state_on = LightStateOn::new(state_dimmer.clone(), shared_data.clone());
-
         let state_off = LightStateOff::new(state_dimmer.clone(), shared_data.clone());
 
-        light_hsm.borrow_mut().add_state(top_state);
-        light_hsm.borrow_mut().add_state(state_on);
-        light_hsm.borrow_mut().add_state(state_off.clone());
-        light_hsm.borrow_mut().add_state(state_dimmer);
+        hsm.borrow_mut().add_state(top_state);
+        hsm.borrow_mut().add_state(state_on);
+        hsm.borrow_mut().add_state(state_off.clone());
+        hsm.borrow_mut().add_state(state_dimmer);
+        hsm.borrow_mut().init(state_off).unwrap();
 
-        // Start with the lights off
-        light_hsm.borrow_mut().init(state_off.clone());
+        let light_hsm = Rc::new(RefCell::new(LightControllerHsm {
+            hsm,
+            _shared_data: shared_data.clone(),
+        }));
 
         light_hsm
     }
 
     pub fn get_hsm(&self) -> HsmControllerRef {
         self.hsm.clone()
-    }
-
-    pub fn add_state(&mut self, new_state: StateRef) {
-        self.hsm.borrow_mut().add_state(new_state)
-    }
-
-    /// Note: exposing init like this is discouraged, but can be done!
-    pub fn init(&mut self, starting_state: StateRef) {
-        let _ = self.hsm.borrow_mut().init(starting_state);
     }
 
     /// Note: exposing the current state is ALSO a really bad idea.
