@@ -1,8 +1,6 @@
-use std::{cell::RefCell, rc::Rc};
-
 use rust_hsm::{
-    state::StateRef, state_controller::HsmControllerBuilder,
-    state_controller_trait::HsmControllerRef,
+    state::StateRef, state_controller::{HSMControllerBase, HsmControllerBuilder},
+    state_controller_trait::HsmController,
 };
 
 use crate::light_hsm::{
@@ -15,13 +13,13 @@ use crate::light_hsm::{
 };
 
 pub struct LightControllerHsm {
-    hsm: HsmControllerRef,
+    hsm: HSMControllerBase,
     /// Again...leaking this is a bad idea. It is only done here for testing/asserting
     pub(crate) _shared_data: LightHsmDataRef,
 }
 
 impl LightControllerHsm {
-    pub fn new() -> Rc<RefCell<Self>> {
+    pub fn new() -> Self {
         let shared_data = LightHsmData::new(0);
 
         let top_state = LightStateTop::new();
@@ -42,28 +40,21 @@ impl LightControllerHsm {
             .init(state_off)
             .unwrap();
 
-        let light_hsm = Rc::new(RefCell::new(LightControllerHsm {
-            hsm: Rc::new(RefCell::new(hsm)),
+        let light_hsm = LightControllerHsm {
+            hsm,
             _shared_data: shared_data.clone(),
-        }));
+        };
 
         light_hsm
     }
 
-    pub fn get_hsm(&self) -> HsmControllerRef {
-        self.hsm.clone()
-    }
-
     /// Note: exposing the current state is ALSO a really bad idea.
     pub fn get_current_state(&self) -> StateRef {
-        self.hsm.borrow().get_current_state().clone()
+        self.hsm.get_current_state()
     }
 
-    pub fn dispatch_into_hsm(&self, event: LightEvents) {
-        self.get_hsm()
-            .clone()
-            .borrow_mut()
-            .external_dispatch_into_hsm(&event);
+    pub fn dispatch_into_hsm(&mut self, event: LightEvents) {
+        self.hsm.external_dispatch_into_hsm(&event)
     }
 
     /// In a real HSM this is a BAD idea. DO NOT LEAK the data

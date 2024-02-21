@@ -6,8 +6,6 @@ use crate::{
 
 use std::{cell::RefCell, rc::Rc};
 
-pub type HsmControllerRef = Rc<RefCell<dyn HsmController>>;
-
 /// The traits required to be a proper HSM controller
 /// Everything is implemented for consumers.
 /// The rest is implemented by HSMControllerBase.
