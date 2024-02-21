@@ -1,7 +1,8 @@
 use std::{cell::RefCell, rc::Rc};
 
 use rust_hsm::{
-    state::StateRef, state_controller::HSMControllerBase, state_controller_trait::HsmControllerRef,
+    state::StateRef, state_controller::HsmControllerBuilder,
+    state_controller_trait::HsmControllerRef,
 };
 
 use crate::light_hsm::{
@@ -21,11 +22,8 @@ pub struct LightControllerHsm {
 
 impl LightControllerHsm {
     pub fn new() -> Rc<RefCell<Self>> {
-        let hsm: HsmControllerRef = HSMControllerBase::new("LightControllerHsm".to_string());
-
-        // Start the light "off"
         let shared_data = LightHsmData::new(0);
-        
+
         let top_state = LightStateTop::new();
 
         // Both on and off leverage similar behavior to dimmer in most cases!
@@ -35,14 +33,17 @@ impl LightControllerHsm {
         let state_on = LightStateOn::new(state_dimmer.clone(), shared_data.clone());
         let state_off = LightStateOff::new(state_dimmer.clone(), shared_data.clone());
 
-        hsm.borrow_mut().add_state(top_state);
-        hsm.borrow_mut().add_state(state_on);
-        hsm.borrow_mut().add_state(state_off.clone());
-        hsm.borrow_mut().add_state(state_dimmer);
-        hsm.borrow_mut().init(state_off).unwrap();
+        let hsm = HsmControllerBuilder::new("LightControllerHsm".to_string())
+            .add_state(top_state)
+            .add_state(state_on)
+            .add_state(state_off.clone())
+            .add_state(state_dimmer)
+            // Start the light "off"
+            .init(state_off)
+            .unwrap();
 
         let light_hsm = Rc::new(RefCell::new(LightControllerHsm {
-            hsm,
+            hsm: Rc::new(RefCell::new(hsm)),
             _shared_data: shared_data.clone(),
         }));
 

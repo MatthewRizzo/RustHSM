@@ -25,29 +25,12 @@ pub type HsmControllerRef = Rc<RefCell<dyn HsmController>>;
 /// # Non Trivial functions to implement (even if the trivial ones are done right)
 ///     * external_dispatch_into_hsm: requires an understanding of how your system behaves
 pub trait HsmController {
-    fn init(&mut self, initial_state: StateRef) -> HSMResult<()> {
-        let initial_state_id = initial_state.borrow().get_state_id();
-        let states = self.get_states();
-        if *initial_state_id.get_id() as usize >= states.len() {
-            return Err(HSMError::InvalidStateId(format!(
-                "Initial State with Id {} is not valid. There are only {} states!",
-                *initial_state_id.get_id(),
-                states.len() - 1
-            )));
-        }
-
-        self.set_current_state(initial_state);
-
-        Ok(())
-    }
-
     /// Fire an event external to the HSM into it and see how it gets handled.
     /// If there is complicated threading between consumers and this HSM,
     /// override this function to navigate the ITC between them.
     // fn external_dispatch_into_hsm(&mut self, event: &dyn StateEventsIF);
     fn external_dispatch_into_hsm(&mut self, event: &dyn StateEventsIF);
 
-    fn add_state(&mut self, new_state: StateRef);
     fn get_current_state(&self) -> StateRef;
     fn set_current_state(&mut self, new_current_state: StateRef);
     fn get_states(&self) -> StatesRefVec;
