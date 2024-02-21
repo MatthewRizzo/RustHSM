@@ -12,7 +12,7 @@ pub enum LightAdjustment {
 pub struct LightHsmData {
     /// 0 = off, 100 = on
     /// Again...leaking this is a bad idea. It is only done here for testing/asserting
-    pub (crate) light_percentage: u8,
+    pub(crate) light_percentage: u8,
 }
 
 impl LightHsmData {

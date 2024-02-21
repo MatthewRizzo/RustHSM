@@ -11,7 +11,7 @@ It breaks the HSM into these notable components:
 1. State Controller trait: [HsmController]
 2. Concrete Controller implementing [HsmController]: [HSMControllerBase](./rust_hsm/src/state_controller.rs)
    1. Notably there is very little inside the concrete controller, by design!
-   2. If you would like to implement a thread safe controller, copy `HSMControllerBase` and implement a different `external_dispatch_into_hsm`!
+   2. If you would like to implement a thread safe controller, copy `HSMControllerBase` and implement a different `dispatch_event`!
 3. States which implement the [StateChainOfResponsibility] trait
    1. Handles flow into / out of a given state
    2. Allows implementers to delegate the handling of their custom enum events within the `handle_event` impl.
