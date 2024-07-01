@@ -1,5 +1,6 @@
 use rust_hsm::{
-    state::StateRef,
+    errors::HSMResult,
+    state::StateId,
     state_controller::{HSMControllerBase, HsmControllerBuilder},
     state_controller_trait::HsmController,
 };
@@ -11,11 +12,13 @@ use crate::light_hsm::{
     light_state_off::LightStateOff,
     light_state_on::LightStateOn,
     light_state_top::LightStateTop,
+    light_states::LightStates,
 };
 
 pub struct LightControllerHsm {
     hsm: HSMControllerBase,
     /// Again...leaking this is a bad idea. It is only done here for testing/asserting
+    /// Do NOT do this in a real HSM
     pub(crate) _shared_data: LightHsmDataRef,
 }
 
@@ -37,7 +40,7 @@ impl LightControllerHsm {
             .add_state(state_on)
             .add_state(state_off.clone())
             .add_state(state_dimmer.clone())
-            .init(state_dimmer)
+            .init(LightStates::DIMMER as u16)
             .unwrap();
 
         let light_hsm = LightControllerHsm {
@@ -49,11 +52,12 @@ impl LightControllerHsm {
     }
 
     /// Note: exposing the current state is ALSO a really bad idea.
-    pub fn get_current_state(&self) -> StateRef {
+    pub fn get_current_state(&self) -> StateId {
         self.hsm.get_current_state()
     }
 
-    pub fn dispatch_into_hsm(&mut self, event: LightEvents) {
+    pub fn dispatch_into_hsm(&mut self, event: LightEvents) -> HSMResult<()> {
+        // In a real system you would want to translate from HSMResult -> your result
         self.hsm.dispatch_event(&event)
     }
 

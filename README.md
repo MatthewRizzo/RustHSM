@@ -53,16 +53,16 @@ The controller always has a "current" state, but in the process of handling
 events, you can inform the controller of a state change request.
 
 This is done indirectly, by requesting a state change with the
-`ComposableStateData` held by all states.
+`StateDataDelegate` held by all states.
 
-Specifically, the `submit_state_change_request` API exposed by `ComposableStateData`.
+Specifically, the `submit_state_change_request` API exposed by `StateDataDelegate`.
 
 Here is an example:
 
 ```Rust
 pub struct FakeState {
-    /// All state's that work with the system will need to have a member of type ComposableStateData
-    base_state_data: ComposableStateData,
+    /// All state's that work with the system will need to have a member of type StateDataDelegate
+    base_state_data: StateDataDelegate,
     shared_data: MyCustomDataStructureSharedAcrossAllStates,
 }
 

@@ -1,6 +1,8 @@
 use rust_hsm::{
     events::StateEventsIF,
-    state::{ComposableStateData, StateChainOfResponsibility, StateRef},
+    state::{StateIF, StateRef},
+    state_builder::StateBuilder,
+    state_data_delegate::StateDelegateRef,
 };
 
 use crate::{
@@ -9,22 +11,29 @@ use crate::{
 use std::{cell::RefCell, rc::Rc};
 
 pub(crate) struct LightStateOff {
-    state_data: ComposableStateData,
+    state_data: StateDelegateRef,
     shared_data: LightHsmDataRef,
 }
 
 impl LightStateOff {
     pub fn new(parent_state: StateRef, shared_data: LightHsmDataRef) -> Rc<RefCell<Self>> {
-        let state_data = ComposableStateData::new(
+        let state_builder = StateBuilder::new(
             LightStates::OFF as u16,
             "LightStateOff".to_string(),
-            Some(parent_state),
+            Some(parent_state.borrow().get_state_data()),
         );
 
-        Rc::new(RefCell::new(Self {
-            state_data,
+        let built_state = Rc::new(RefCell::new(Self {
+            state_data: state_builder.get_delegate(),
             shared_data,
-        }))
+        }));
+
+        state_builder
+            .set_concrete_state(built_state.clone())
+            .validate_build()
+            .expect("Failed to build LightStateOff!");
+
+        built_state
     }
 
     fn handle_toggle(&mut self) -> bool {
@@ -32,13 +41,18 @@ impl LightStateOff {
     }
 
     fn handle_turn_on(&mut self) -> bool {
-        self.state_data
-            .submit_state_change_request(LightStates::ON as u16);
-        true
+        match self
+            .state_data
+            .borrow_mut()
+            .submit_state_change_request(LightStates::ON as u16)
+        {
+            Ok(()) => true,
+            Err(_) => false,
+        }
     }
 }
 
-impl StateChainOfResponsibility for LightStateOff {
+impl StateIF for LightStateOff {
     fn handle_event(&mut self, event: &dyn StateEventsIF) -> bool {
         let events: LightEvents = LightEvents::from(event);
         // top returns true for all events
@@ -53,11 +67,7 @@ impl StateChainOfResponsibility for LightStateOff {
         self.shared_data.borrow_mut().turn_off();
     }
 
-    fn get_state_data(&self) -> &ComposableStateData {
-        &self.state_data
-    }
-
-    fn get_state_data_mut(&mut self) -> &mut ComposableStateData {
-        &mut self.state_data
+    fn get_state_data(&self) -> StateDelegateRef {
+        self.state_data.clone()
     }
 }

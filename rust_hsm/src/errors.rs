@@ -13,4 +13,10 @@ pub enum HSMError {
     Io(#[from] std::io::Error),
     #[error("Event Not Implemented Error")]
     EventNotImplemented(String),
+    #[error("Delegate Details Never Set. Use builder!")]
+    DelegateDetailsNotSet(),
+    #[error("Concrete StateIF never provided!. Use StateBuilder builder correctly!!")]
+    ConcreteStateNotProvidedToBuilder(),
+    #[error("Controller was never initialized. Make sure to call HsmControllerBuilder  Init before using state-related API's!")]
+    ControllerNotInitialized(),
 }
