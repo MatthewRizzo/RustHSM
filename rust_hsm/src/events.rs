@@ -47,6 +47,8 @@ pub struct HsmEvent {
     event_args: Vec<u8>,
 }
 
+/// TODO - maybe encourage the use of protobufs? Users can serialize and de-serialize their
+/// protos from strings as the event args
 impl HsmEvent {
     pub fn new(event_id: u16, event_args: Vec<u8>) -> HsmEvent {
         HsmEvent {

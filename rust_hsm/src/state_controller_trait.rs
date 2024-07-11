@@ -1,10 +1,10 @@
 use crate::{
     errors::{HSMError, HSMResult},
     events::{StateEventVec, StateEventsIF},
-    state::{StateChainOfResponsibility, StateId, StateRef, StatesRefVec},
+    state::{StateChainRef, StateId, StatesVec},
 };
 
-use std::{cell::RefCell, rc::Rc};
+use std::collections::VecDeque;
 
 /// The traits required to be a proper HSM controller
 /// Everything is implemented for consumers.
@@ -13,7 +13,7 @@ use std::{cell::RefCell, rc::Rc};
 /// Used to allow indirection between states and controller.
 /// # Functions to implement that are trivial (if done right):
 ///     * add_state
-///     * get_current_state
+///     * get_current_state_link
 ///     * set_current_state
 ///     * get_requested_new_state
 ///     * set_requested_new_state
@@ -26,11 +26,12 @@ pub trait HsmController {
     /// Fire an event external to the HSM into it and see how it gets handled.
     /// If there is complicated threading between consumers and this HSM,
     /// override this function to navigate the ITC between them.
-    fn dispatch_event(&mut self, event: &dyn StateEventsIF);
+    fn dispatch_event(&mut self, event: &dyn StateEventsIF) -> HSMResult<()>;
 
-    fn get_current_state(&self) -> StateRef;
-    fn set_current_state(&mut self, new_current_state: StateRef);
-    fn get_states(&self) -> StatesRefVec;
+    // TODO - this should not be in a public trait!
+    fn get_current_state_link(&self) -> HSMResult<StateChainRef>;
+    fn get_states(&self) -> &StatesVec;
+    fn set_current_state(&mut self, new_current_state: StateId);
     fn get_state_change_string(&mut self) -> &mut String;
     fn get_hsm_name(&self) -> String;
     fn append_to_follow_up_events(&mut self, new_follow_up_events: &mut StateEventVec);
@@ -38,9 +39,9 @@ pub trait HsmController {
     /// Send an event into the HSM from within the HSM.
     /// i.e. a state fires an event while handling another event
     // fn handle_event(&mut self, event: &dyn StateEventsIF) {
-    fn handle_event(&mut self, event: &dyn StateEventsIF) {
+    fn handle_event(&mut self, event: &dyn StateEventsIF) -> HSMResult<()> {
         // keep going until event is handled (true) or we reach the end
-        let mut current_state = self.get_current_state();
+        let mut current_state_link = self.get_current_state_link()?;
 
         let hsm_name = self.get_hsm_name();
         self.get_state_change_string().clear();
@@ -48,23 +49,44 @@ pub trait HsmController {
             format!(
                 "{}: {}({}): ",
                 hsm_name,
-                current_state.borrow().get_state_name(),
+                // current_state_link.delegate_operation().borrow_mut().get_details().get_state_name(),
+                current_state_link
+                    .borrow()
+                    .delegate_operation()
+                    .borrow()
+                    .get_details()?
+                    .borrow()
+                    .get_state_name(),
                 event
             )
             .as_str(),
         );
 
         let mut requested_state_change: Option<StateId> = None;
+        let mut follow_up_events: StateEventVec = VecDeque::new();
 
         loop {
-            let is_handled = current_state.borrow_mut().handle_event(event);
+            // let is_handled = current_state_link.borrow_mut().handle_event(event);
+            let is_handled = current_state_link.borrow().handle_event(event);
 
-            let local_requested_state_change = current_state
+            let local_requested_state_change = current_state_link
+                .borrow()
+                .delegate_operation()
                 .borrow_mut()
-                .get_state_data_mut()
+                .get_details()?
+                .borrow_mut()
                 .get_and_reset_requested_state_change();
 
-            let nested_change_requested = local_requested_state_change.is_some() && requested_state_change.is_some();
+            let current_state_name = current_state_link
+                .borrow()
+                .delegate_operation()
+                .borrow()
+                .get_details()?
+                .borrow()
+                .get_state_name();
+
+            let nested_change_requested =
+                local_requested_state_change.is_some() && requested_state_change.is_some();
             assert!(
                 !nested_change_requested,
                 "Requested state change to {} but a change to {} was already requested! Illegal nested state change!",
@@ -74,68 +96,120 @@ pub trait HsmController {
 
             requested_state_change = local_requested_state_change;
 
+            // Cache the follow up events before we change state
+            // The events will have been set by the chain of handle_events
+            let current_requested_followup = current_state_link
+                .borrow()
+                .delegate_operation()
+                .borrow_mut()
+                .get_details()?
+                .borrow_mut()
+                .get_and_reset_follow_up_events();
+            for followup_event in current_requested_followup {
+                self.get_state_change_string().push_str(
+                    format!(
+                        "[{}: Adding event {} to queue]",
+                        current_state_name,
+                        followup_event.get_event_name()
+                    )
+                    .as_str(),
+                );
+                follow_up_events.push_back(followup_event)
+            }
+
             if is_handled {
                 // event has been handled!
                 break;
             }
 
-            let next_state = current_state.borrow().get_super_state();
-            if next_state.is_none() {
+            let next_state_id = current_state_link
+                .borrow()
+                .delegate_operation()
+                .borrow()
+                .get_details()?
+                .borrow()
+                .get_parent_delegate();
+
+            if next_state_id.is_none() {
                 break;
             }
 
+            let next_state = self.get_state_by_id(
+                self.get_states(),
+                &next_state_id
+                    .unwrap()
+                    .borrow()
+                    .get_details()?
+                    .borrow()
+                    .get_state_id(),
+            )?;
+
             // Maybe the parent state handles this
-            current_state = next_state.unwrap();
+            current_state_link = next_state.unwrap();
         }
 
-        // Cache the follow up events before we change state
-        // The events will have been set by the chain of handle_events
-        let mut follow_up_events = current_state.borrow_mut().get_and_reset_follow_up_events();
-
         // Check if a state change was requested on state data cache while processing.
-        self.handle_state_change(requested_state_change);
+        self.handle_state_change(requested_state_change)?;
 
         // At this point, the state has changed
 
         if let Some(next_event) = follow_up_events.pop_back() {
-            self.handle_event(next_event.as_ref());
+            self.handle_event(next_event.as_ref())?;
             for follow_up_event in follow_up_events {
-                self.get_current_state()
+                self.get_current_state_link()?
+                    .borrow()
+                    .delegate_operation()
                     .borrow_mut()
-                    .dispatch_internally(follow_up_event)
+                    .dispatch_event_internally(follow_up_event)?
             }
         }
+        Ok(())
     }
 
-    fn get_state_name(&self, state_id: &StateId) -> Option<String> {
-        for state_ref in &self.get_states() {
-            let borrowed_state = state_ref.as_ref().borrow();
-            if borrowed_state.get_state_id() == *state_id {
-                return Some(borrowed_state.get_state_name().clone());
+    fn get_state_name(&self, state_id: &StateId) -> HSMResult<Option<String>> {
+        for state_ref in self.get_states() {
+            let delegate = state_ref.borrow().delegate_operation();
+            let details = delegate.borrow().get_details()?;
+            if &details.borrow().get_state_id() == state_id {
+                return Ok(Some(details.borrow().get_state_name().clone()));
             }
         }
-        None
+        Ok(None)
     }
 
     /// Precondition - the state id is valid!
     /// Can't use indices because some consumers might not start states at 0
-    fn get_state_by_id(&self, states: &StatesRefVec, state_id: &StateId) -> Option<StateRef> {
+    fn get_state_by_id(
+        &self,
+        states: &StatesVec,
+        target_state_id: &StateId,
+    ) -> HSMResult<Option<StateChainRef>> {
         // let state = states.get(*state_id.get_id() as usize).unwrap().clone();
-        let mut found_state: Option<StateRef> = None;
+        let mut found_state: Option<StateChainRef> = None;
         for state in states {
-            if &state.borrow().get_state_id() == state_id {
+            // if &state.borrow().get_state_id() == state_id {
+            if state.borrow().is_state(target_state_id) {
                 found_state = Some(state.clone());
                 break;
             }
         }
 
+        let state_id = found_state
+            .clone()
+            .unwrap()
+            .borrow()
+            .delegate_operation()
+            .borrow()
+            .get_details()?
+            .borrow()
+            .get_state_id();
         debug_assert!(
-            found_state.clone().unwrap().borrow().get_state_id() == *state_id,
+            &state_id == target_state_id,
             "Target: {}. retrieved {}",
-            state_id.get_id(),
-            found_state.unwrap().borrow().get_state_id()
+            target_state_id,
+            state_id
         );
-        found_state
+        Ok(found_state)
     }
 
     /// # Brief
@@ -145,15 +219,17 @@ pub trait HsmController {
     /// If there is, exit all states from [current->LCA) and enter (LCA->target]
     /// THEN handle start on target.
     /// # NOTE
-    /// CHANGE STATES ARE ENQUEUED BY ComposableStateData::submit_state_change_request
-    fn handle_state_change(&mut self, requested_state_change: Option<StateId>) {
+    /// CHANGE STATES ARE ENQUEUED BY StateDataDelegate::submit_state_change_request
+    fn handle_state_change(&mut self, requested_state_change: Option<StateId>) -> HSMResult<()> {
         if requested_state_change.is_none() {
             self.post_handle_event_operations();
-            return;
+            return Ok(());
         }
 
-        let is_target_current = requested_state_change.clone().unwrap().get_id()
-            == self.get_current_state().borrow().get_state_id().get_id();
+        let is_target_current = self
+            .get_current_state_link()?
+            .borrow()
+            .is_state(&requested_state_change.clone().unwrap());
 
         // We don't clear requests once completed - requires too much mutable access
         // Just no-op on all subsequent events
@@ -162,7 +238,7 @@ pub trait HsmController {
         }
 
         let requested_state = requested_state_change.unwrap();
-        let target_state_opt = self.get_state_by_id(&self.get_states(), &requested_state);
+        let target_state_opt = self.get_state_by_id(&self.get_states(), &requested_state)?;
 
         if target_state_opt.is_none() {
             println!("Requested change state to state id {}! \
@@ -170,7 +246,7 @@ pub trait HsmController {
                 requested_state.get_id()
             );
             self.post_handle_event_operations();
-            return;
+            return Ok(());
         }
 
         let target_state = target_state_opt.unwrap();
@@ -181,25 +257,53 @@ pub trait HsmController {
             requested_state.get_id()
         );
 
-        let target_state_name = target_state.borrow().get_state_name();
+        let target_state_name = target_state
+            .clone()
+            .borrow()
+            .delegate_operation()
+            .borrow()
+            .get_details()?
+            .borrow()
+            .get_state_name();
 
-        let current_state = self.get_current_state();
+        let current_state = self.get_current_state_link()?;
 
         let lca_state_id = self
             .find_lca(current_state, target_state.clone())
             .expect(format!("Error finding lca for {} ", self.get_state_change_string()).as_str());
 
-        self.exit_states_until_target(lca_state_id);
-        self.enter_states_lca_to_target(target_state.clone(), target_state_name);
+        self.exit_states_until_target(lca_state_id)?;
+        self.enter_states_lca_to_target(target_state.clone(), target_state_name)?;
 
         self.post_handle_event_operations();
-        self.set_current_state(target_state);
+        self.set_current_state(
+            target_state
+                .borrow_mut()
+                .delegate_operation()
+                .borrow()
+                .get_details()?
+                .borrow()
+                .get_state_id(),
+        );
+
+        Ok(())
     }
 
     /// get LCA between current state and other state
     /// todo - unit test this. make this a self function
-    fn find_lca(&self, source_state: StateRef, target_state: StateRef) -> HSMResult<StateId> {
-        let target_state_id = target_state.as_ref().borrow().get_state_id().clone();
+    fn find_lca(
+        &self,
+        source_state: StateChainRef,
+        target_state: StateChainRef,
+    ) -> HSMResult<StateId> {
+        let target_state_id = target_state
+            .borrow()
+            .delegate_operation()
+            .borrow()
+            .get_details()?
+            .borrow()
+            .get_state_id()
+            .clone();
 
         if target_state_id.get_id() == &StateId::get_top_state_id() {
             return Err(HSMError::InvalidStateId(
@@ -207,8 +311,8 @@ pub trait HsmController {
             ));
         }
 
-        let source_path_to_root = source_state.borrow().get_path_to_root_state();
-        let target_path_to_root = target_state.borrow().get_path_to_root_state();
+        let source_path_to_root = source_state.borrow().get_path_to_root_state()?;
+        let target_path_to_root = target_state.borrow().get_path_to_root_state()?;
         let mut root_to_source_path = source_path_to_root.clone();
         root_to_source_path.reverse();
         let mut root_to_target_path = target_path_to_root.clone();
@@ -231,47 +335,71 @@ pub trait HsmController {
     }
 
     /// Exits all states along the path to target (not including target)
-    fn exit_states_until_target(&mut self, target_state_id: StateId) {
-        let mut current_state = self.get_current_state();
+    fn exit_states_until_target(&mut self, target_state_id: StateId) -> HSMResult<()> {
+        let mut current_state_delegate = self
+            .get_current_state_link()?
+            .borrow_mut()
+            .delegate_operation();
 
         let mut exited_first_state = false;
         self.get_state_change_string().push_str("[");
 
         loop {
-            let opt_parent_state = current_state.borrow().get_super_state();
+            let opt_parent_delegate = current_state_delegate
+                .borrow()
+                .get_details()?
+                .borrow()
+                .get_parent_delegate();
             // this should only happen if we reach top
-            if opt_parent_state.is_none() {
+            if opt_parent_delegate.is_none() {
                 break;
             }
 
-            if current_state.as_ref().borrow().get_state_id() == target_state_id {
+            if current_state_delegate
+                .borrow()
+                .get_details()?
+                .borrow()
+                .get_state_id()
+                == target_state_id
+            {
                 break;
             }
 
-            let current_state_name = current_state.borrow().get_state_name();
+            let current_state_name = current_state_delegate
+                .borrow()
+                .get_details()?
+                .borrow()
+                .get_state_name();
             if exited_first_state {
                 self.get_state_change_string().push_str(", ");
             }
 
             self.get_state_change_string()
                 .push_str(format!("{}(EXIT)", current_state_name).as_str());
-            current_state.as_ref().borrow_mut().handle_state_exit();
+            current_state_delegate
+                .borrow_mut()
+                .get_details()?
+                .borrow()
+                .get_current_state_trait()
+                .borrow_mut()
+                .handle_state_exit();
 
-            current_state = opt_parent_state.unwrap();
+            current_state_delegate = opt_parent_delegate.unwrap().clone();
             exited_first_state = true;
         }
 
         self.get_state_change_string().push_str("], ");
+        Ok(())
     }
 
     /// Assumes we have already exited all states (non-inclusive) to the LCA
     /// Starts the target state
     fn enter_states_lca_to_target(
         &mut self,
-        target_state: Rc<RefCell<dyn StateChainOfResponsibility>>,
+        target_state: StateChainRef,
         target_state_name: String,
-    ) {
-        let target_to_lca_path = target_state.borrow().get_path_to_root_state();
+    ) -> HSMResult<()> {
+        let target_to_lca_path = target_state.borrow().get_path_to_root_state()?;
 
         // Do NOT include the LCA in the Enter's
         let mut lca_to_target_path = target_to_lca_path.into_iter().rev();
@@ -280,20 +408,44 @@ pub trait HsmController {
         self.get_state_change_string().push_str("[");
 
         for state_id_to_enter in lca_to_target_path {
-            let state_to_enter: StateRef = self
-                .get_state_by_id(&self.get_states(), &state_id_to_enter)
+            let state_to_enter = self
+                .get_state_by_id(&self.get_states(), &state_id_to_enter)?
                 .unwrap();
-            state_to_enter.as_ref().borrow_mut().handle_state_enter();
+            state_to_enter
+                .borrow()
+                .delegate_operation()
+                .borrow()
+                .get_details()?
+                .borrow()
+                .get_current_state_trait()
+                .borrow_mut()
+                .handle_state_enter();
 
-            let state_to_enter_name = state_to_enter.as_ref().borrow().get_state_name().clone();
+            let state_to_enter_name = state_to_enter
+                .borrow()
+                .delegate_operation()
+                .borrow()
+                .get_details()?
+                .borrow()
+                .get_state_name()
+                .clone();
             self.get_state_change_string()
                 .push_str(format!("{}(ENTER), ", state_to_enter_name).as_str());
         }
 
         // Start the target state!
-        target_state.as_ref().borrow_mut().handle_state_start();
+        target_state
+            .borrow()
+            .delegate_operation()
+            .borrow()
+            .get_details()?
+            .borrow()
+            .get_current_state_trait()
+            .borrow_mut()
+            .handle_state_start();
         self.get_state_change_string()
             .push_str(format!("{}(START)]", target_state_name).as_str());
+        Ok(())
     }
 
     /// Operations to be performed after handling an event, regardless of outcome!

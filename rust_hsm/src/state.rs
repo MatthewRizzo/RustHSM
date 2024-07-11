@@ -1,7 +1,11 @@
 ///! This file contains the logic for an individual state and how they link together
-use std::{cell::RefCell, collections::VecDeque, rc::Rc};
+use std::{cell::RefCell, rc::Rc};
 
-use crate::events::{StateEventRef, StateEventsIF};
+use crate::{
+    errors::HSMResult,
+    events::StateEventsIF,
+    state_data_delegate::{StateDataDelegate, StateDelegateRef},
+};
 
 #[derive(PartialEq, Clone)]
 pub struct StateId {
@@ -34,13 +38,14 @@ impl std::fmt::Display for StateId {
     }
 }
 
-pub type StatesRefVec = Vec<Rc<RefCell<dyn StateChainOfResponsibility>>>;
-pub type StateRef = Rc<RefCell<dyn StateChainOfResponsibility>>;
+/// The State reference accepted as inputs for the controller to manage
+pub type StateRef = Rc<RefCell<dyn StateIF>>;
 
-/// Traits that all state's must implement to be used
-/// # Reference
-/// https://github.com/lpxxn/rust-design-pattern/blob/master/behavioral/chain_of_responsibility.rs
-pub trait StateChainOfResponsibility {
+/// The only owner of the chain is the controller! no one else should be aware of its existence!
+pub type StateChainRef = Rc<RefCell<StateChainOfResponsibility>>;
+pub type StatesVec = Vec<StateChainRef>;
+
+pub trait StateIF {
     /// Called whenever state is entered (even if transiently).
     /// If multiple states are traveled through, it is called multiple times
     /// by every relevant state
@@ -59,127 +64,76 @@ pub trait StateChainOfResponsibility {
     /// * False if not handled and should be delegated to a higher state.
     fn handle_event(&mut self, event_id: &dyn StateEventsIF) -> bool;
 
-    fn get_state_data(&self) -> &ComposableStateData;
-    fn get_state_data_mut(&mut self) -> &mut ComposableStateData;
+    // TODO - I really really wish there was a way to remove this
+    // At the very least we have limited the blast range&damage through encapsulation
+    fn get_state_data(&self) -> StateDelegateRef;
 
-    fn get_state_id(&self) -> StateId {
-        self.get_state_data().get_state_id()
+    // Have a state fire an event back at the controller while handling another event!
+    // Dispatches another event to the controller from an internal state.
+    // Allows a state to fire into the controller (i.e. a timer expires).
+    // Will append to list of other events dispatched internal
+}
+
+/// If you have one chain in the link, you can navigate around the rest of the links in the tree!
+pub struct StateChainOfResponsibility {
+    pub(crate) state: StateRef,
+    pub(crate) delegate: Rc<RefCell<StateDataDelegate>>,
+}
+
+impl StateChainOfResponsibility {
+    pub(crate) fn new(state: StateRef, delegate: StateDelegateRef) -> Self {
+        Self { state, delegate }
     }
 
-    fn get_super_state(&self) -> Option<StateRef> {
-        self.get_state_data().get_parent_state()
+    pub(crate) fn handle_event(&self, event: &dyn StateEventsIF) -> bool {
+        self.state.borrow_mut().handle_event(event)
     }
 
-    fn get_state_name(&self) -> String {
-        self.get_state_data().get_state_name()
+    /// Delegate behavior to the link's data member
+    pub(crate) fn delegate_operation(&self) -> StateDelegateRef {
+        self.delegate.clone()
     }
 
     /// Gets the path to root. Including self and root.
-    fn get_path_to_root_state(&self) -> Vec<StateId> {
+    pub(crate) fn get_path_to_root_state(&self) -> HSMResult<Vec<StateId>> {
         let mut path_to_root = Vec::<StateId>::new();
-        path_to_root.push(self.get_state_id().clone());
+        path_to_root.push(
+            self.delegate
+                .borrow()
+                .get_details()?
+                .borrow()
+                .get_state_id()
+                .clone(),
+        );
 
-        let mut current_state = self.get_super_state();
+        let mut current_state_delegate = self
+            .delegate_operation()
+            .borrow()
+            .get_details()?
+            .borrow()
+            .get_parent_delegate();
 
-        while let Some(state) = current_state {
-            path_to_root.push(state.borrow().get_state_id().clone());
+        while let Some(state) = current_state_delegate {
+            // path_to_root.push(state.borrow().get_state_id().clone());
+            path_to_root.push(state.borrow().get_details()?.borrow().get_state_id());
 
-            let opt_parent_state = state.borrow().get_super_state();
-            current_state = opt_parent_state;
+            let opt_parent_state_delegate =
+                state.borrow().get_details()?.borrow().get_parent_delegate();
+            current_state_delegate = opt_parent_state_delegate;
         }
 
-        path_to_root
+        Ok(path_to_root)
     }
 
-    /// Retrieves the next event requested for processing by consuming it!
-    /// This ensures the same event is not accidentally performed twice.
-    /// No-op if there are no follow-up / requested events!
-    /// Similar to the data structure API but exposes to controller trait!
-    fn get_and_reset_follow_up_events(&mut self) -> VecDeque<StateEventRef> {
-        self.get_state_data_mut().get_and_reset_follow_up_events()
-    }
-
-    /// Dispatches another event to the controller from an internal state.
-    /// Allows a state to fire into the controller (i.e. a timer expires).
-    /// Will append to list of other events dispatched internal
-    fn dispatch_internally(&mut self, follow_up_event: StateEventRef) {
-        self.get_state_data_mut()
-            .internal_event_dispatch(follow_up_event);
-    }
-}
-
-// Base state struct your actual state's should be composed of
-// Has all the information you need to impl the data-oriented API's of the state trait
-pub struct ComposableStateData {
-    state_id: StateId,
-    // None if there is no parent state (i.e. TOP state)
-    state_name: String,
-    parent_state: Option<StateRef>,
-    requested_state_change: Option<StateId>,
-    follow_up_events_requested: VecDeque<StateEventRef>,
-}
-
-impl ComposableStateData {
-    pub fn new(state_id: u16, state_name: String, parent_state: Option<StateRef>) -> Self {
-        Self {
-            state_id: StateId::new(state_id),
-            state_name,
-            parent_state,
-            requested_state_change: None,
-            follow_up_events_requested: VecDeque::new(),
-        }
-    }
-
-    pub(crate) fn get_state_id(&self) -> StateId {
-        self.state_id.clone()
-    }
-
-    pub(crate) fn get_state_name(&self) -> String {
-        self.state_name.clone()
-    }
-
-    pub(crate) fn get_parent_state(&self) -> Option<StateRef> {
-        self.parent_state.clone()
-    }
-
-    /// Retrieves the requested state change by consuming it! Resets the value.
-    /// This ensures the same change state is not accidentally requested twice
-    /// (i.e. if it is not cleared after it is done)
-    pub(crate) fn get_and_reset_requested_state_change(&mut self) -> Option<StateId> {
-        self.requested_state_change.take()
-    }
-
-    /// Retrieves the next event requested for processing by consuming it!
-    /// This ensures the same event is not accidentally performed twice.
-    /// No-op if there are no follow-up / requested events!
-    pub(crate) fn get_and_reset_follow_up_events(&mut self) -> VecDeque<StateEventRef> {
-        let consumed = self.follow_up_events_requested.clone();
-        self.follow_up_events_requested.clear();
-        consumed
-    }
-
-    /// Stores the requested state change.
-    /// The controller will reap the new value once done with its current processing.
-    /// Afterwards, this value will be reset.
-    /// # Why
-    /// The request cannot be submit directly to the controller.
-    /// Complicated reason that simplifies to: triggering an event in the controller causes
-    /// it to be borrowed mutably.
-    /// Likewise, updating the hsm cache to have a new state requires a mutable borrow.
-    /// If change state was submit to the controller directly,
-    /// the state dispatched to would borrow the controller AGAIN causing a panic.
-    /// Instead, indirectly submit the request to the data cache (even if borrowed it is dropped immediately).
-    /// Then have the controller "reap" the results of the change request once it is done handling
-    /// the event; no extra borrows required.
-    pub fn submit_state_change_request(&mut self, new_state: u16) {
-        self.requested_state_change = Some(StateId::new(new_state));
-    }
-
-    /// Used by states to trigger a dispatch into the controller from themselves.
-    /// Will get handled by the HSM after the current event has been run-to-completion.
-    /// For example a timer expiring triggering a timeout event.
-    pub fn internal_event_dispatch(&mut self, event: StateEventRef) {
-        self.follow_up_events_requested.push_back(event)
+    pub(crate) fn is_state(&self, state_id: &StateId) -> bool {
+        &self
+            .delegate
+            .borrow()
+            .get_details()
+            .expect("Compared a state to ours before our delegate was initialized!")
+            .borrow()
+            .get_state_id()
+            == state_id
     }
 }
 

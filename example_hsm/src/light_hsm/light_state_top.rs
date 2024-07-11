@@ -1,26 +1,35 @@
 use std::{cell::RefCell, rc::Rc};
 
 use rust_hsm::{
-    events::StateEventsIF,
-    state::{ComposableStateData, StateChainOfResponsibility},
+    events::StateEventsIF, state::StateIF, state_builder::StateBuilder,
+    state_data_delegate::StateDelegateRef,
 };
 
 use crate::{light_events::LightEvents, light_states::LightStates};
 
 pub struct LightStateTop {
-    state_data: ComposableStateData,
+    state_data: StateDelegateRef,
 }
 
 impl LightStateTop {
     pub fn new() -> Rc<RefCell<Self>> {
-        let data =
-            ComposableStateData::new(LightStates::TOP as u16, "LightStateTop".to_string(), None);
+        let state_builder =
+            StateBuilder::new(LightStates::TOP as u16, "LightStateTop".to_string(), None);
 
-        Rc::new(RefCell::new(Self { state_data: data }))
+        let built_state = Rc::new(RefCell::new(Self {
+            state_data: state_builder.get_delegate(),
+        }));
+
+        state_builder
+            .set_concrete_state(built_state.clone())
+            .validate_build()
+            .expect("Failed to build LightStateDimmer!");
+
+        built_state
     }
 }
 
-impl StateChainOfResponsibility for LightStateTop {
+impl StateIF for LightStateTop {
     fn handle_event(&mut self, event: &dyn StateEventsIF) -> bool {
         let events: LightEvents = LightEvents::from(event);
         // top returns true for all events
@@ -29,11 +38,7 @@ impl StateChainOfResponsibility for LightStateTop {
         }
     }
 
-    fn get_state_data(&self) -> &ComposableStateData {
-        &self.state_data
-    }
-
-    fn get_state_data_mut(&mut self) -> &mut ComposableStateData {
-        &mut self.state_data
+    fn get_state_data(&self) -> StateDelegateRef {
+        self.state_data.clone()
     }
 }
