@@ -1,35 +1,23 @@
-use std::{cell::RefCell, rc::Rc};
+use rust_hsm::{events::StateEventsIF, state::StateIF};
 
-use rust_hsm::{
-    events::StateEventsIF, state::StateIF, state_builder::StateBuilder,
-    state_data_delegate::StateDelegateRef,
+use crate::{
+    light_events::LightEvents, light_hsm_data::LightHsmDataRef, light_states::LightStates,
 };
 
-use crate::{light_events::LightEvents, light_states::LightStates};
-
-pub struct LightStateTop {
-    state_data: StateDelegateRef,
+pub(crate) struct LightStateTop {
+    shared_data: LightHsmDataRef,
+    // Not every state needs a delegate!
 }
 
 impl LightStateTop {
-    pub fn new() -> Rc<RefCell<Self>> {
-        let state_builder =
-            StateBuilder::new(LightStates::TOP as u16, "LightStateTop".to_string(), None);
-
-        let built_state = Rc::new(RefCell::new(Self {
-            state_data: state_builder.get_delegate(),
-        }));
-
-        state_builder
-            .set_concrete_state(built_state.clone())
-            .validate_build()
-            .expect("Failed to build LightStateDimmer!");
+    pub fn new(shared_data: LightHsmDataRef) -> Box<Self> {
+        let built_state = Box::new(Self { shared_data });
 
         built_state
     }
 }
 
-impl StateIF for LightStateTop {
+impl StateIF<LightStates> for LightStateTop {
     fn handle_event(&mut self, event: &dyn StateEventsIF) -> bool {
         let events: LightEvents = LightEvents::from(event);
         // top returns true for all events
@@ -37,8 +25,15 @@ impl StateIF for LightStateTop {
             _ => true,
         }
     }
+    fn handle_state_start(&mut self) {
+        self.shared_data.borrow_mut().top_start_called += 1;
+    }
 
-    fn get_state_data(&self) -> StateDelegateRef {
-        self.state_data.clone()
+    fn handle_state_enter(&mut self) {
+        self.shared_data.borrow_mut().top_enter_called += 1;
+    }
+
+    fn handle_state_exit(&mut self) {
+        self.shared_data.borrow_mut().top_exit_called += 1;
     }
 }

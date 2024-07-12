@@ -1,7 +1,8 @@
 use rust_hsm::events::{HsmEvent, StateEventsIF};
+use strum::Display;
 
 #[repr(u16)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, strum::FromRepr, Display)]
 pub enum LightEvents {
     Toggle = 1,
     /// Sets the light to a value from 1-100
@@ -50,26 +51,7 @@ impl From<&dyn StateEventsIF> for LightEvents {
     }
 }
 
-impl std::fmt::Display for LightEvents {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            Self::Toggle => write!(f, "Toggle"),
-            Self::Set(value) => write!(f, "Set({value})",),
-            Self::TurnOff => write!(f, "TurnOff"),
-            Self::TurnOn => write!(f, "TurnOn"),
-            Self::ReduceByPercent(value) => write!(f, "ReduceByPercent({value}%)"),
-            Self::IncreaseByPercent(value) => write!(f, "IncreaseByPercent({value})%"),
-            Self::InvalidNumArgs(_) => write!(f, "InvalidNumArgs"),
-            Self::Invalid => write!(f, "Invalid"),
-        }
-    }
-}
-
 impl StateEventsIF for LightEvents {
-    fn get_event_name(&self) -> String {
-        format!("{}", self)
-    }
-
     fn to_event_base(&self) -> HsmEvent {
         let event_id: u16;
         let mut event_args: Vec<u8> = vec![];

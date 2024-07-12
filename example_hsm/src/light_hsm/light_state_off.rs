@@ -1,37 +1,25 @@
 use rust_hsm::{
-    events::StateEventsIF,
-    state::{StateIF, StateRef},
-    state_builder::StateBuilder,
-    state_data_delegate::StateDelegateRef,
+    events::StateEventsIF, state::StateIF, state_engine_channel_delegate::StateEngineDelegate,
 };
 
 use crate::{
     light_events::LightEvents, light_hsm_data::LightHsmDataRef, light_states::LightStates,
 };
-use std::{cell::RefCell, rc::Rc};
 
 pub(crate) struct LightStateOff {
-    state_data: StateDelegateRef,
+    delegate: StateEngineDelegate<LightStates>,
     shared_data: LightHsmDataRef,
 }
 
 impl LightStateOff {
-    pub fn new(parent_state: StateRef, shared_data: LightHsmDataRef) -> Rc<RefCell<Self>> {
-        let state_builder = StateBuilder::new(
-            LightStates::OFF as u16,
-            "LightStateOff".to_string(),
-            Some(parent_state.borrow().get_state_data()),
-        );
-
-        let built_state = Rc::new(RefCell::new(Self {
-            state_data: state_builder.get_delegate(),
+    pub fn new(
+        shared_data: LightHsmDataRef,
+        delegate: StateEngineDelegate<LightStates>,
+    ) -> Box<Self> {
+        let built_state = Box::new(Self {
+            delegate,
             shared_data,
-        }));
-
-        state_builder
-            .set_concrete_state(built_state.clone())
-            .validate_build()
-            .expect("Failed to build LightStateOff!");
+        });
 
         built_state
     }
@@ -41,18 +29,14 @@ impl LightStateOff {
     }
 
     fn handle_turn_on(&mut self) -> bool {
-        match self
-            .state_data
-            .borrow_mut()
-            .submit_state_change_request(LightStates::ON as u16)
-        {
+        match self.delegate.change_state(LightStates::ON as u16) {
             Ok(()) => true,
             Err(_) => false,
         }
     }
 }
 
-impl StateIF for LightStateOff {
+impl StateIF<LightStates> for LightStateOff {
     fn handle_event(&mut self, event: &dyn StateEventsIF) -> bool {
         let events: LightEvents = LightEvents::from(event);
         // top returns true for all events
@@ -65,9 +49,14 @@ impl StateIF for LightStateOff {
 
     fn handle_state_start(&mut self) {
         self.shared_data.borrow_mut().turn_off();
+        self.shared_data.borrow_mut().off_start_called += 1;
     }
 
-    fn get_state_data(&self) -> StateDelegateRef {
-        self.state_data.clone()
+    fn handle_state_enter(&mut self) {
+        self.shared_data.borrow_mut().off_enter_called += 1;
+    }
+
+    fn handle_state_exit(&mut self) {
+        self.shared_data.borrow_mut().off_exit_called += 1;
     }
 }

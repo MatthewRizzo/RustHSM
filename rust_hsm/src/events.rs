@@ -1,10 +1,9 @@
 ///! This file contains the logic behind events that can be used by states
 use core::fmt;
-use std::collections::VecDeque;
-use std::rc::Rc;
+use std::fmt::Display;
 
-pub type StateEventRef = Rc<dyn StateEventsIF>;
-pub type StateEventVec = VecDeque<StateEventRef>;
+pub type StatefulEvent = dyn StateEventsIF;
+pub type StatefulEventBox = Box<dyn StateEventsIF>;
 
 /// Abstracts common functionality for all state events into the trait.
 /// Makes impl of actual enum's easier.
@@ -13,14 +12,20 @@ pub type StateEventVec = VecDeque<StateEventRef>;
 /// This is important for logging of events and how they cause state transitions!
 /// The typical format for the write!() should be
 /// ```rust
-///     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-///         match self {
-///             Self::Evt1 => write!(f, "Evt1"),
-///             Self::EvtWithArgs(args) => write!(f, "EvtWithArgs(formatted_args)"),
-///         }
-///     }
-/// ```
-pub trait StateEventsIF: fmt::Display {
+/// use rust_hsm::events::{StateEventsIF, HsmEvent};
+///
+/// #[repr(u16)]
+/// #[derive(Copy, Clone, Display, strum::FromRepr)]
+/// enum Events {
+///     A = 1,
+///     B(u8) = 2,
+///     InvalidNumArgs(usize) = u16::MAX - 1,
+///     Invalid = u16::MAX,
+/// }
+/// impl StateEventsIF for Events {
+///     fn to_event_base(&self) -> HsmEvent { todo!() }
+/// }
+pub trait StateEventsIF: Display {
     /// Converts the known-event-enum into the concrete event struct
     fn to_event_base(&self) -> HsmEvent;
 
@@ -29,7 +34,9 @@ pub trait StateEventsIF: fmt::Display {
         self.to_event_base().get_event_id()
     }
 
-    fn get_event_name(&self) -> String;
+    fn get_event_name(&self) -> String {
+        format!("{}", self)
+    }
 
     /// Gets args as slices of u8 buffer. Reconstitute them on your end if needed.
     /// Can most likely be delegated to HsmEvent.
@@ -47,7 +54,7 @@ pub struct HsmEvent {
     event_args: Vec<u8>,
 }
 
-/// TODO - maybe encourage the use of protobufs? Users can serialize and de-serialize their
+/// TODO - maybe encourage the use of protobufs/serde? Users can serialize and de-serialize their
 /// protos from strings as the event args
 impl HsmEvent {
     pub fn new(event_id: u16, event_args: Vec<u8>) -> HsmEvent {
