@@ -1,14 +1,17 @@
 ///! This file contains the logic for an individual state and how they link together
-use std::{cell::RefCell, rc::Rc};
+use std::{boxed::Box, cell::RefCell, fmt::Display};
 
-use crate::{
-    errors::HSMResult,
-    events::StateEventsIF,
-    state_data_delegate::{StateDataDelegate, StateDelegateRef},
-};
+use crate::events::StatefulEvent;
 
-#[derive(PartialEq, Clone)]
-pub struct StateId {
+/// All valid definitions of a 'class' of state's must be StateTypes.
+/// By enforcing these characteristics, the Engine can translate from its
+/// limited knowledge set to the true state typing provided by the consumer.
+pub trait StateTypeTrait: Display + Into<u16> + From<u16> + Clone {}
+
+/// An inexpensive token representing a state that can be exchanged for more
+/// complex data structures.
+#[derive(Eq, Hash, PartialEq, Clone, Debug)]
+pub(crate) struct StateId {
     id: u16,
 }
 
@@ -22,14 +25,6 @@ impl StateId {
     pub fn get_id(&self) -> &u16 {
         &self.id
     }
-
-    pub fn is_top_state(&self) -> bool {
-        self.id == Self::get_top_state_id()
-    }
-
-    pub fn get_top_state_id() -> u16 {
-        0
-    }
 }
 
 impl std::fmt::Display for StateId {
@@ -38,14 +33,16 @@ impl std::fmt::Display for StateId {
     }
 }
 
+impl From<u16> for StateId {
+    fn from(state_id: u16) -> Self {
+        Self::new(state_id)
+    }
+}
+
 /// The State reference accepted as inputs for the controller to manage
-pub type StateRef = Rc<RefCell<dyn StateIF>>;
+pub type StateBox<StateType> = Box<dyn StateIF<StateType>>;
 
-/// The only owner of the chain is the controller! no one else should be aware of its existence!
-pub type StateChainRef = Rc<RefCell<StateChainOfResponsibility>>;
-pub type StatesVec = Vec<StateChainRef>;
-
-pub trait StateIF {
+pub trait StateIF<StateType: StateTypeTrait> {
     /// Called whenever state is entered (even if transiently).
     /// If multiple states are traveled through, it is called multiple times
     /// by every relevant state
@@ -62,83 +59,30 @@ pub trait StateIF {
     /// # Return
     /// * True if handled. Do not keep handling
     /// * False if not handled and should be delegated to a higher state.
-    fn handle_event(&mut self, event_id: &dyn StateEventsIF) -> bool;
-
-    // TODO - I really really wish there was a way to remove this
-    // At the very least we have limited the blast range&damage through encapsulation
-    fn get_state_data(&self) -> StateDelegateRef;
-
-    // Have a state fire an event back at the controller while handling another event!
-    // Dispatches another event to the controller from an internal state.
-    // Allows a state to fire into the controller (i.e. a timer expires).
-    // Will append to list of other events dispatched internal
+    fn handle_event(&mut self, event_id: &StatefulEvent) -> bool;
 }
 
-/// If you have one chain in the link, you can navigate around the rest of the links in the tree!
-pub struct StateChainOfResponsibility {
-    pub(crate) state: StateRef,
-    pub(crate) delegate: Rc<RefCell<StateDataDelegate>>,
+/// All elements are cheap data structure or those with copy/clone/rc semantics
+pub(crate) struct StateContainer<StateType: StateTypeTrait> {
+    pub state_ref: RefCell<StateBox<StateType>>,
+    pub state_id: StateId,
 }
 
-impl StateChainOfResponsibility {
-    pub(crate) fn new(state: StateRef, delegate: StateDelegateRef) -> Self {
-        Self { state, delegate }
-    }
-
-    pub(crate) fn handle_event(&self, event: &dyn StateEventsIF) -> bool {
-        self.state.borrow_mut().handle_event(event)
-    }
-
-    /// Delegate behavior to the link's data member
-    pub(crate) fn delegate_operation(&self) -> StateDelegateRef {
-        self.delegate.clone()
-    }
-
-    /// Gets the path to root. Including self and root.
-    pub(crate) fn get_path_to_root_state(&self) -> HSMResult<Vec<StateId>> {
-        let mut path_to_root = Vec::<StateId>::new();
-        path_to_root.push(
-            self.delegate
-                .borrow()
-                .get_details()?
-                .borrow()
-                .get_state_id()
-                .clone(),
-        );
-
-        let mut current_state_delegate = self
-            .delegate_operation()
-            .borrow()
-            .get_details()?
-            .borrow()
-            .get_parent_delegate();
-
-        while let Some(state) = current_state_delegate {
-            // path_to_root.push(state.borrow().get_state_id().clone());
-            path_to_root.push(state.borrow().get_details()?.borrow().get_state_id());
-
-            let opt_parent_state_delegate =
-                state.borrow().get_details()?.borrow().get_parent_delegate();
-            current_state_delegate = opt_parent_state_delegate;
+impl<StateType: StateTypeTrait> StateContainer<StateType> {
+    pub(crate) fn new(state_id: StateId, state_ref: StateBox<StateType>) -> Self {
+        Self {
+            state_ref: RefCell::new(state_ref),
+            state_id,
         }
-
-        Ok(path_to_root)
     }
 
-    pub(crate) fn is_state(&self, state_id: &StateId) -> bool {
-        &self
-            .delegate
-            .borrow()
-            .get_details()
-            .expect("Compared a state to ours before our delegate was initialized!")
-            .borrow()
-            .get_state_id()
-            == state_id
+    pub(crate) fn get_state_id(&self) -> &StateId {
+        &self.state_id
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    // use super::*;
     // todo - more tests
 }

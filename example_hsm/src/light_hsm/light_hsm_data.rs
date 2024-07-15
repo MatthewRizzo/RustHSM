@@ -13,6 +13,18 @@ pub struct LightHsmData {
     /// 0 = off, 100 = on
     /// Again...leaking this is a bad idea. It is only done here for testing/asserting
     pub(crate) light_percentage: u8,
+    pub top_enter_called: u16,
+    pub top_start_called: u16,
+    pub top_exit_called: u16,
+    pub on_enter_called: u16,
+    pub on_start_called: u16,
+    pub on_exit_called: u16,
+    pub off_enter_called: u16,
+    pub off_start_called: u16,
+    pub off_exit_called: u16,
+    pub dimmer_enter_called: u16,
+    pub dimmer_start_called: u16,
+    pub dimmer_exit_called: u16,
 }
 
 impl LightHsmData {
@@ -20,6 +32,18 @@ impl LightHsmData {
     pub(crate) fn new(percentage: u8) -> Rc<RefCell<Self>> {
         Rc::new(RefCell::new(Self {
             light_percentage: percentage,
+            top_enter_called: Default::default(),
+            top_start_called: Default::default(),
+            top_exit_called: Default::default(),
+            on_enter_called: Default::default(),
+            on_start_called: Default::default(),
+            on_exit_called: Default::default(),
+            off_enter_called: Default::default(),
+            off_start_called: Default::default(),
+            off_exit_called: Default::default(),
+            dimmer_enter_called: Default::default(),
+            dimmer_start_called: Default::default(),
+            dimmer_exit_called: Default::default(),
         }))
     }
 
@@ -61,5 +85,73 @@ impl LightHsmData {
             new_percentage
         };
         self.set_lighting(bounded_adjustment);
+    }
+
+    pub(crate) fn clear_counts(&mut self) {
+        self.top_enter_called = Default::default();
+        self.top_start_called = Default::default();
+        self.top_exit_called = Default::default();
+        self.on_enter_called = Default::default();
+        self.on_start_called = Default::default();
+        self.on_exit_called = Default::default();
+        self.off_enter_called = Default::default();
+        self.off_start_called = Default::default();
+        self.off_exit_called = Default::default();
+        self.dimmer_enter_called = Default::default();
+        self.dimmer_start_called = Default::default();
+        self.dimmer_exit_called = Default::default();
+    }
+
+    pub(crate) fn none_called(&self) -> bool {
+        let mut res = true;
+        if self.top_enter_called > 0 {
+            println!("top_enter_called {} times", self.top_enter_called);
+            res = false;
+        }
+        if self.top_start_called > 0 {
+            println!("top_start_called {} times", self.top_start_called);
+            res = false;
+        }
+        if self.top_exit_called > 0 {
+            println!("top_exit_called {} times", self.top_exit_called);
+            res = false;
+        }
+        if self.on_enter_called > 0 {
+            println!("on_enter_called {} times", self.on_enter_called);
+            res = false;
+        }
+        if self.on_start_called > 0 {
+            println!("on_start_called {} times", self.on_start_called);
+            res = false;
+        }
+        if self.on_exit_called > 0 {
+            println!("on_exit_called {} times", self.on_exit_called);
+            res = false;
+        }
+        if self.off_enter_called > 0 {
+            println!("off_enter_called {} times", self.off_enter_called);
+            res = false;
+        }
+        if self.off_start_called > 0 {
+            println!("off_start_called {} times", self.off_start_called);
+            res = false;
+        }
+        if self.off_exit_called > 0 {
+            println!("off_exit_called {} times", self.off_exit_called);
+            res = false;
+        }
+        if self.dimmer_enter_called > 0 {
+            println!("dimmer_enter_called {} times", self.dimmer_enter_called);
+            res = false;
+        }
+        if self.dimmer_start_called > 0 {
+            println!("dimmer_start_called {} times", self.dimmer_start_called);
+            res = false;
+        }
+        if self.dimmer_exit_called > 0 {
+            println!("dimmer_exit_called {} times", self.dimmer_exit_called);
+            res = false;
+        }
+        res
     }
 }

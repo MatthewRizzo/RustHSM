@@ -1,8 +1,5 @@
 use rust_hsm::{
-    events::StateEventsIF,
-    state::{StateIF, StateRef},
-    state_builder::StateBuilder,
-    state_data_delegate::StateDelegateRef,
+    events::StateEventsIF, state::StateIF, state_engine_channel_delegate::StateEngineDelegate,
 };
 
 use crate::{
@@ -10,43 +7,32 @@ use crate::{
     light_hsm_data::{LightAdjustment, LightHsmDataRef},
     light_states::LightStates,
 };
-use std::{cell::RefCell, rc::Rc};
 
 pub(crate) struct LightStateDimmer {
-    state_data: StateDelegateRef,
+    delegate: StateEngineDelegate<LightStates>,
     shared_data: LightHsmDataRef,
 }
 
 impl LightStateDimmer {
-    pub fn new(parent_state: StateRef, shared_data: LightHsmDataRef) -> Rc<RefCell<Self>> {
-        let state_builder = StateBuilder::new(
-            LightStates::DIMMER as u16,
-            "LightStateDimmer".to_string(),
-            Some(parent_state.borrow().get_state_data()),
-        );
-
-        let built_state = Rc::new(RefCell::new(Self {
-            state_data: state_builder.get_delegate(),
+    pub fn new(
+        shared_data: LightHsmDataRef,
+        delegate: StateEngineDelegate<LightStates>,
+    ) -> Box<Self> {
+        let built_state = Box::new(Self {
+            delegate,
             shared_data,
-        }));
-
-        state_builder
-            .set_concrete_state(built_state.clone())
-            .validate_build()
-            .expect("Failed to build LightStateDimmer!");
+        });
 
         built_state
     }
 
     fn set_to_percentage(&mut self, percentage: u8) -> bool {
-        let event_res = if percentage == 0 {
-            self.state_data
-                .borrow_mut()
-                .dispatch_event_internally(Rc::new(LightEvents::TurnOff))
+        let event_res: bool = if percentage == 0 {
+            self.delegate
+                .dispatch_event_internally(Box::new(LightEvents::TurnOff))
         } else if percentage >= 100 {
-            self.state_data
-                .borrow_mut()
-                .dispatch_event_internally(Rc::new(LightEvents::TurnOn))
+            self.delegate
+                .dispatch_event_internally(Box::new(LightEvents::TurnOn))
         } else {
             Ok(())
         }
@@ -63,7 +49,7 @@ impl LightStateDimmer {
     }
 }
 
-impl StateIF for LightStateDimmer {
+impl StateIF<LightStates> for LightStateDimmer {
     fn handle_event(&mut self, event_id: &dyn StateEventsIF) -> bool {
         let events: LightEvents = LightEvents::from(event_id);
         // top returns true for all events
@@ -81,7 +67,15 @@ impl StateIF for LightStateDimmer {
         }
     }
 
-    fn get_state_data(&self) -> StateDelegateRef {
-        self.state_data.clone()
+    fn handle_state_start(&mut self) {
+        self.shared_data.borrow_mut().dimmer_start_called += 1;
+    }
+
+    fn handle_state_enter(&mut self) {
+        self.shared_data.borrow_mut().dimmer_enter_called += 1;
+    }
+
+    fn handle_state_exit(&mut self) {
+        self.shared_data.borrow_mut().dimmer_exit_called += 1;
     }
 }

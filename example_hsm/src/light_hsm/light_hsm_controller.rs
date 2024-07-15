@@ -1,8 +1,6 @@
 use rust_hsm::{
     errors::HSMResult,
-    state::StateId,
-    state_controller::{HSMControllerBase, HsmControllerBuilder},
-    state_controller_trait::HsmController,
+    state_engine::{HSMEngine, HSMEngineBuilder},
 };
 
 use crate::light_hsm::{
@@ -15,31 +13,61 @@ use crate::light_hsm::{
     light_states::LightStates,
 };
 
+use log;
+
 pub struct LightControllerHsm {
-    hsm: HSMControllerBase,
+    hsm: HSMEngine<LightStates>,
     /// Again...leaking this is a bad idea. It is only done here for testing/asserting
     /// Do NOT do this in a real HSM
     pub(crate) _shared_data: LightHsmDataRef,
 }
 
 impl LightControllerHsm {
-    pub fn new() -> Self {
+    pub fn new(engine_log_level: log::LevelFilter) -> Self {
         let shared_data = LightHsmData::new(0);
 
-        let top_state = LightStateTop::new();
+        let engine_builder = HSMEngineBuilder::new(
+            "LightControllerHsm".to_string(),
+            LightStates::TOP as u16,
+            log::LevelFilter::Info,
+            engine_log_level,
+        );
+
+        #[allow(unused)] // Not every state needs a delegate! But you can acquire it!
+        let top_delegate = engine_builder
+            .create_delegate(LightStates::TOP.into())
+            .expect("");
+        let on_delegate = engine_builder
+            .create_delegate(LightStates::ON.into())
+            .expect("");
+        let off_delegate = engine_builder
+            .create_delegate(LightStates::OFF.into())
+            .expect("");
+        let dimmer_delegate = engine_builder
+            .create_delegate(LightStates::DIMMER.into())
+            .expect("");
+        // .expect_err("Requesting the same delegate twice is illegal!");
+        assert!(
+            engine_builder
+                .create_delegate(LightStates::ON.into())
+                .is_err(),
+            "Requesting the same delegate twice is illegal!"
+        );
+
+        let top_state = LightStateTop::new(shared_data.clone());
 
         // dimmer leverage's similar behavior to on in most cases!
         // the non-shared behavior they impl for themselves!
         // Hence on is dimmer's parent.
-        let state_on = LightStateOn::new(top_state.clone(), shared_data.clone());
-        let state_dimmer = LightStateDimmer::new(state_on.clone(), shared_data.clone());
-        let state_off = LightStateOff::new(top_state.clone(), shared_data.clone());
+        let state_on = LightStateOn::new(shared_data.clone(), on_delegate);
+        let state_dimmer = LightStateDimmer::new(shared_data.clone(), off_delegate);
+        let state_off = LightStateOff::new(shared_data.clone(), dimmer_delegate);
 
-        let hsm = HsmControllerBuilder::new("LightControllerHsm".to_string())
-            .add_state(top_state)
-            .add_state(state_on)
-            .add_state(state_off.clone())
-            .add_state(state_dimmer.clone())
+        let hsm = engine_builder
+            .add_state(top_state, LightStates::TOP, None)
+            .add_state(state_on, LightStates::ON, Some(LightStates::TOP))
+            .add_state(state_off, LightStates::OFF, Some(LightStates::TOP))
+            .add_state(state_dimmer, LightStates::DIMMER, Some(LightStates::ON))
             .init(LightStates::DIMMER as u16)
             .unwrap();
 
@@ -52,13 +80,17 @@ impl LightControllerHsm {
     }
 
     /// Note: exposing the current state is ALSO a really bad idea.
-    pub fn get_current_state(&self) -> StateId {
-        self.hsm.get_current_state()
+    pub(crate) fn get_current_state(&self) -> LightStates {
+        // In a real system you would want to translate from HSMResult -> your result
+        self.hsm
+            .get_current_state()
+            .expect("Called before the HSM was initialized!")
     }
 
-    pub fn dispatch_into_hsm(&mut self, event: LightEvents) -> HSMResult<()> {
+    pub(crate) fn dispatch_into_hsm(&mut self, event: LightEvents) -> HSMResult<(), LightStates> {
         // In a real system you would want to translate from HSMResult -> your result
-        self.hsm.dispatch_event(&event)
+        let stateful_event_box = Box::new(event);
+        self.hsm.dispatch_event(stateful_event_box)
     }
 
     /// In a real HSM this is a BAD idea. DO NOT LEAK the data

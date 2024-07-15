@@ -7,3 +7,5 @@ edition = "2021"
 [dependencies]
 closure = "0.3.0"
 rust_hsm = {path = "../rust_hsm"}
+strum = { version = "0.26.3", features = ["derive"]}
+log = "0.4.22"
