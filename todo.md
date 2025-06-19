@@ -15,14 +15,9 @@ Main Aims:
    3. [x] state_mapping.rs
    4. [x] utils.rs
 3. [ ] Define macro to do boilerplate code for impl of state enum trait(s)
-4. [ ] Devise a method for the hsm to be woken up if anyone puts a request on the queue
-   1. [ ] Probably requires moving ALL requests to the channel
-   2. [ ] Maybe a notification mechanism waking up the HSMEngine to start processing the events
-   3. [ ] For example tokio [Notify](https://docs.rs/tokio/latest/tokio/sync/struct.Notify.html)
-   4. Delegates / public API's of the HSMEngine will notify
-   5. The HSMEngine will await the notification when idle
-   6. Why? Right now, states cannot asynchronously fire events back at the hsm.
-      1. They can do so while processing, but not after.
-      2. In otherwords, they would need to orchestrate a re-direction of async events externally
-      3. If they do not do this, it will not be handled until the NEXT time an external consumer fires
-      4. Moreover, it will be handled out of order
+4. [ ] Devise a method for the states to un-prompted fire events back at the engine.
+   1. Right now we drive all events to completion once prompted by an external force
+   2. However, if a state async/unprompted sends an event, the hsm will not wake up to it
+   3. The quick-and-dirty solution would be:
+      1. The states to somehow loop the call-back to an external source
+      2. The external source could then fire back into the hsm
