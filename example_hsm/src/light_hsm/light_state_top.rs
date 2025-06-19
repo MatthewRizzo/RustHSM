@@ -1,39 +1,38 @@
-use std::{cell::RefCell, rc::Rc};
+use rust_hsm::state::StateIF;
 
-use rust_hsm::{
-    events::StateEventsIF,
-    state::{ComposableStateData, StateChainOfResponsibility},
+use crate::{
+    light_events::LightEvents, light_hsm_data::LightHsmDataRef, light_states::LightStates,
 };
 
-use crate::{light_events::LightEvents, light_states::LightStates};
-
-pub struct LightStateTop {
-    state_data: ComposableStateData,
+pub(crate) struct LightStateTop {
+    shared_data: LightHsmDataRef,
+    // Not every state needs a delegate!
 }
 
 impl LightStateTop {
-    pub fn new() -> Rc<RefCell<Self>> {
-        let data =
-            ComposableStateData::new(LightStates::TOP as u16, "LightStateTop".to_string(), None);
+    pub fn new(shared_data: LightHsmDataRef) -> Box<Self> {
+        let built_state = Box::new(Self { shared_data });
 
-        Rc::new(RefCell::new(Self { state_data: data }))
+        built_state
     }
 }
 
-impl StateChainOfResponsibility for LightStateTop {
-    fn handle_event(&mut self, event: &dyn StateEventsIF) -> bool {
-        let events: LightEvents = LightEvents::from(event);
+impl StateIF<LightStates, LightEvents> for LightStateTop {
+    fn handle_event(&mut self, event: &LightEvents) -> bool {
         // top returns true for all events
-        match events {
+        match event {
             _ => true,
         }
     }
-
-    fn get_state_data(&self) -> &ComposableStateData {
-        &self.state_data
+    fn handle_state_start(&mut self) {
+        self.shared_data.borrow_mut().top_start_called += 1;
     }
 
-    fn get_state_data_mut(&mut self) -> &mut ComposableStateData {
-        &mut self.state_data
+    fn handle_state_enter(&mut self) {
+        self.shared_data.borrow_mut().top_enter_called += 1;
+    }
+
+    fn handle_state_exit(&mut self) {
+        self.shared_data.borrow_mut().top_exit_called += 1;
     }
 }

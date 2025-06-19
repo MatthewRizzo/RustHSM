@@ -1,36 +1,41 @@
-use rust_hsm::{
-    events::StateEventsIF,
-    state::{ComposableStateData, StateChainOfResponsibility, StateRef},
-};
+use rust_hsm::{state::StateIF, state_engine_channel_delegate::StateEngineDelegate};
 
 use crate::{
     light_events::LightEvents,
     light_hsm_data::{LightAdjustment, LightHsmDataRef},
     light_states::LightStates,
 };
-use std::{cell::RefCell, rc::Rc};
 
 pub(crate) struct LightStateDimmer {
-    state_data: ComposableStateData,
+    delegate: StateEngineDelegate<LightStates, LightEvents>,
     shared_data: LightHsmDataRef,
 }
 
 impl LightStateDimmer {
-    pub fn new(parent_state: StateRef, shared_data: LightHsmDataRef) -> Rc<RefCell<Self>> {
-        let state_data = ComposableStateData::new(
-            LightStates::DIMMER as u16,
-            "LightStateDimmer".to_string(),
-            Some(parent_state),
-        );
-
-        Rc::new(RefCell::new(Self {
-            state_data,
+    pub fn new(
+        shared_data: LightHsmDataRef,
+        delegate: StateEngineDelegate<LightStates, LightEvents>,
+    ) -> Box<Self> {
+        let built_state = Box::new(Self {
+            delegate,
             shared_data,
-        }))
+        });
+
+        built_state
     }
 
     fn set_to_percentage(&mut self, percentage: u8) -> bool {
-        self.shared_data.borrow_mut().set_lighting(percentage)
+        let event_res: bool = if percentage == 0 {
+            self.delegate
+                .dispatch_event_internally(LightEvents::TurnOff)
+        } else if percentage >= 100 {
+            self.delegate.dispatch_event_internally(LightEvents::TurnOn)
+        } else {
+            Ok(())
+        }
+        .map_or_else(|_| false, |_| true);
+
+        self.shared_data.borrow_mut().set_lighting(percentage) && event_res
     }
 
     fn set_relative(&mut self, action: LightAdjustment, relative_percentage: u8) -> bool {
@@ -41,27 +46,32 @@ impl LightStateDimmer {
     }
 }
 
-impl StateChainOfResponsibility for LightStateDimmer {
-    fn handle_event(&mut self, event_id: &dyn StateEventsIF) -> bool {
-        let events: LightEvents = LightEvents::from(event_id);
+impl StateIF<LightStates, LightEvents> for LightStateDimmer {
+    fn handle_event(&mut self, event: &LightEvents) -> bool {
         // top returns true for all events
-        match events {
-            LightEvents::Set(percentage) => self.set_to_percentage(percentage),
+        match event {
+            LightEvents::Set(percentage) => self.set_to_percentage(*percentage),
             LightEvents::ReduceByPercent(percentage) => {
-                self.set_relative(LightAdjustment::Decrease, percentage)
+                self.set_relative(LightAdjustment::Decrease, *percentage)
             }
             LightEvents::IncreaseByPercent(percentage) => {
-                self.set_relative(LightAdjustment::Increase, percentage)
+                self.set_relative(LightAdjustment::Increase, *percentage)
             }
+            // TurnOff and Toggle are implemented by our parent (LightStateOn)
+            // Leverage that behavior by not handling them
             _ => false,
         }
     }
 
-    fn get_state_data(&self) -> &ComposableStateData {
-        &self.state_data
+    fn handle_state_start(&mut self) {
+        self.shared_data.borrow_mut().dimmer_start_called += 1;
     }
 
-    fn get_state_data_mut(&mut self) -> &mut ComposableStateData {
-        &mut self.state_data
+    fn handle_state_enter(&mut self) {
+        self.shared_data.borrow_mut().dimmer_enter_called += 1;
+    }
+
+    fn handle_state_exit(&mut self) {
+        self.shared_data.borrow_mut().dimmer_exit_called += 1;
     }
 }

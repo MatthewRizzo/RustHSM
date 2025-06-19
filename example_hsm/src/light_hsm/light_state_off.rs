@@ -1,30 +1,25 @@
-use rust_hsm::{
-    events::StateEventsIF,
-    state::{ComposableStateData, StateChainOfResponsibility, StateRef},
-};
+use rust_hsm::{state::StateIF, state_engine_channel_delegate::StateEngineDelegate};
 
 use crate::{
     light_events::LightEvents, light_hsm_data::LightHsmDataRef, light_states::LightStates,
 };
-use std::{cell::RefCell, rc::Rc};
 
 pub(crate) struct LightStateOff {
-    state_data: ComposableStateData,
+    delegate: StateEngineDelegate<LightStates, LightEvents>,
     shared_data: LightHsmDataRef,
 }
 
 impl LightStateOff {
-    pub fn new(parent_state: StateRef, shared_data: LightHsmDataRef) -> Rc<RefCell<Self>> {
-        let state_data = ComposableStateData::new(
-            LightStates::OFF as u16,
-            "LightStateOff".to_string(),
-            Some(parent_state),
-        );
-
-        Rc::new(RefCell::new(Self {
-            state_data,
+    pub fn new(
+        shared_data: LightHsmDataRef,
+        delegate: StateEngineDelegate<LightStates, LightEvents>,
+    ) -> Box<Self> {
+        let built_state = Box::new(Self {
+            delegate,
             shared_data,
-        }))
+        });
+
+        built_state
     }
 
     fn handle_toggle(&mut self) -> bool {
@@ -32,17 +27,16 @@ impl LightStateOff {
     }
 
     fn handle_turn_on(&mut self) -> bool {
-        self.state_data
-            .submit_state_change_request(LightStates::ON as u16);
-        true
+        match self.delegate.change_state(LightStates::ON as u16) {
+            Ok(()) => true,
+            Err(_) => false,
+        }
     }
 }
 
-impl StateChainOfResponsibility for LightStateOff {
-    fn handle_event(&mut self, event: &dyn StateEventsIF) -> bool {
-        let events: LightEvents = LightEvents::from(event);
-        // top returns true for all events
-        match events {
+impl StateIF<LightStates, LightEvents> for LightStateOff {
+    fn handle_event(&mut self, event: &LightEvents) -> bool {
+        match event {
             LightEvents::Toggle => self.handle_toggle(),
             LightEvents::TurnOn => self.handle_turn_on(),
             _ => false,
@@ -51,13 +45,14 @@ impl StateChainOfResponsibility for LightStateOff {
 
     fn handle_state_start(&mut self) {
         self.shared_data.borrow_mut().turn_off();
+        self.shared_data.borrow_mut().off_start_called += 1;
     }
 
-    fn get_state_data(&self) -> &ComposableStateData {
-        &self.state_data
+    fn handle_state_enter(&mut self) {
+        self.shared_data.borrow_mut().off_enter_called += 1;
     }
 
-    fn get_state_data_mut(&mut self) -> &mut ComposableStateData {
-        &mut self.state_data
+    fn handle_state_exit(&mut self) {
+        self.shared_data.borrow_mut().off_exit_called += 1;
     }
 }
