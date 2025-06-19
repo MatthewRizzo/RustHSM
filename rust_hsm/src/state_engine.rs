@@ -1,6 +1,6 @@
 use crate::{
     errors::{HSMError, HSMResult},
-    events::{StateEventsIF, StatefulEventBox},
+    events::StateEventTrait,
     logger::HSMLogger,
     state::{StateBox, StateContainer, StateId, StateTypeTrait},
     state_engine_channel_delegate::{StateEngineDelegate, StateEngineMessages},
@@ -23,29 +23,29 @@ use std::{
 
 /// Runs the orchestration of the state 'machine' while considering its hierarchy/
 // TODO - add a generic for state events too!
-pub struct HSMEngine<StateType: StateTypeTrait> {
+pub struct HSMEngine<StateType: StateTypeTrait, StateEvents: StateEventTrait> {
     pub(crate) hsm_name: String,
     pub(crate) current_state: StateId,
     /// Used to cache the current known sequence of events
     pub(crate) state_change_string: RefCell<String>,
-    pub(crate) state_mapping: StateMapping<StateType>,
+    pub(crate) state_mapping: StateMapping<StateType, StateEvents>,
     pub(crate) logger: HSMLogger,
-    state_proxy_requests: Receiver<StateEngineMessages>,
+    state_proxy_requests: Receiver<StateEngineMessages<StateEvents>>,
     // This is risky and could lead to us getting stuck!
-    pending_events: Vec<Box<dyn StateEventsIF>>,
+    pending_events: Vec<StateEvents>,
     pub(crate) phantom_state_enum: PhantomData<StateType>,
 }
 
-impl<StateType: StateTypeTrait> HSMEngine<StateType> {
+impl<StateType: StateTypeTrait, StateEvents: StateEventTrait> HSMEngine<StateType, StateEvents> {
     /// Create an HSM engine.
     /// Highly recommend NOT exposing the HSMEngine beyond your container.
     pub(crate) fn new(
         hsm_name: String,
         logger: HSMLogger,
         starting_state: StateId,
-        state_mapping: StateMapping<StateType>,
-        state_proxy_requests: Receiver<StateEngineMessages>,
-    ) -> HSMResult<HSMEngine<StateType>, StateType> {
+        state_mapping: StateMapping<StateType, StateEvents>,
+        state_proxy_requests: Receiver<StateEngineMessages<StateEvents>>,
+    ) -> HSMResult<HSMEngine<StateType, StateEvents>, StateType> {
         logger.log_info(
             get_function_name!(),
             format!(
@@ -77,7 +77,7 @@ impl<StateType: StateTypeTrait> HSMEngine<StateType> {
 
     /// Send an event into the HSM from within the HSM.
     /// i.e. a state fires an event while handling another event
-    fn handle_event_internally(&mut self, event: StatefulEventBox) -> HSMResult<(), StateType> {
+    fn handle_event_internally(&mut self, event: StateEvents) -> HSMResult<(), StateType> {
         // keep going until event is handled (true) or we reach the end
 
         // State id is the variable updated each loop!
@@ -97,7 +97,7 @@ impl<StateType: StateTypeTrait> HSMEngine<StateType> {
                 "{}: {}({}): ",
                 hsm_name,
                 resolve_state_name::<StateType>(&current_state_id),
-                event.as_ref()
+                event
             )
             .as_str(),
         );
@@ -109,11 +109,11 @@ impl<StateType: StateTypeTrait> HSMEngine<StateType> {
                     Some(current_state) => current_state,
                 };
 
-            let event_name = event.as_ref().get_event_name().clone();
+            let event_name = event.get_event_name().clone();
             let is_handled = current_state_container
                 .state_ref
                 .borrow_mut()
-                .handle_event(event.as_ref());
+                .handle_event(&event);
 
             if is_handled {
                 break;
@@ -142,15 +142,14 @@ impl<StateType: StateTypeTrait> HSMEngine<StateType> {
                             StateType::from(*current_state_container.state_id.get_id()),
                             StateType::from(*next_id.get_id()),
                         )
-                    })?
-                    .clone(),
+                    })?,
             };
 
             self.logger.log_debug(
                 get_function_name!(),
                 format!(
                     "Letting Parent State Handle the event: {}({})",
-                    event.as_ref().get_event_name(),
+                    event.get_event_name(),
                     utils::resolve_state_name::<StateType>(&next_state.get_state_id()),
                 )
                 .as_str(),
@@ -180,10 +179,7 @@ impl<StateType: StateTypeTrait> HSMEngine<StateType> {
     /// * This implicitly defers all state changes and event firings until the
     /// end of handling the current event.
     /// * Follows the ethos of "run current task to completion"
-    fn process_proxy_requests(
-        &mut self,
-        current_event: &StatefulEventBox,
-    ) -> HSMResult<(), StateType> {
+    fn process_proxy_requests(&mut self, current_event: &StateEvents) -> HSMResult<(), StateType> {
         loop {
             let req = match self.state_proxy_requests.recv_timeout(Duration::new(0, 0)) {
                 Err(_) => break, // all proxy requests have been processed! We are done!
@@ -204,8 +200,8 @@ impl<StateType: StateTypeTrait> HSMEngine<StateType> {
 
     fn handle_single_proxy_request(
         &mut self,
-        req: StateEngineMessages,
-        current_event: &StatefulEventBox,
+        req: StateEngineMessages<StateEvents>,
+        current_event: &StateEvents,
         already_changed_state: &mut bool,
     ) -> HSMResult<(), StateType> {
         match req {
@@ -312,7 +308,10 @@ impl<StateType: StateTypeTrait> HSMEngine<StateType> {
             .iter()
             .zip(root_to_target_path.iter())
             .filter(|&(source_node, target_node)| source_node.state_id == target_node.state_id)
-            .collect::<Vec<(&&StateContainer<StateType>, &&StateContainer<StateType>)>>();
+            .collect::<Vec<(
+                &&StateContainer<StateType, StateEvents>,
+                &&StateContainer<StateType, StateEvents>,
+            )>>();
         if shared_paths.len() == 0 {
             return Err(HSMError::LCAOfSameNode());
         }
@@ -342,8 +341,7 @@ impl<StateType: StateTypeTrait> HSMEngine<StateType> {
                 Some(state_id) => self
                     .state_mapping
                     .get_state_container(&state_id)
-                    .ok_or_else(|| HSMError::InvalidStateId(StateType::from(*state_id.get_id())))?
-                    .clone(),
+                    .ok_or_else(|| HSMError::InvalidStateId(StateType::from(*state_id.get_id())))?,
             };
 
             if current_state_container.state_id == target_state_id {
@@ -388,8 +386,7 @@ impl<StateType: StateTypeTrait> HSMEngine<StateType> {
         let target_state_container = self
             .state_mapping
             .get_state_container(&target_state_id)
-            .ok_or_else(|| HSMError::InvalidStateId(StateType::from(*target_state_id.get_id())))?
-            .clone();
+            .ok_or_else(|| HSMError::InvalidStateId(StateType::from(*target_state_id.get_id())))?;
         let target_state = StateType::from(*target_state_container.state_id.get_id());
         let target_state_name = target_state.to_string();
 
@@ -445,7 +442,7 @@ impl<StateType: StateTypeTrait> HSMEngine<StateType> {
     }
 
     // TODO consider putting this into a channel as well so that
-    pub fn dispatch_event(&mut self, event: StatefulEventBox) -> HSMResult<(), StateType> {
+    pub fn dispatch_event(&mut self, event: StateEvents) -> HSMResult<(), StateType> {
         // Override for a more custom implementation
         if self.pending_events.len() > 0 {
             self.pending_events.push(event);
@@ -477,8 +474,8 @@ impl<StateType: StateTypeTrait> HSMEngine<StateType> {
 /// Enforces immutability of the controller as states are added.
 /// Effectively the public API to the controller for consumers.
 /// After it is destroyed / init is called, the controller is self-managing
-pub struct HSMEngineBuilder<StateType: StateTypeTrait> {
-    unfinished_state_map: HashMap<StateId, StateContainer<StateType>>,
+pub struct HSMEngineBuilder<StateType: StateTypeTrait, StateEvents: StateEventTrait> {
+    unfinished_state_map: HashMap<StateId, StateContainer<StateType, StateEvents>>,
     // Resolve parent states into refs only once all states have been added!
     unfinished_state_parent_map: HashMap<StateId, StateId>,
     state_added: Vec<StateId>,
@@ -487,18 +484,20 @@ pub struct HSMEngineBuilder<StateType: StateTypeTrait> {
     logger: HSMLogger,
     engine_log_level: HSMLogger,
     delegates_provided: RefCell<Vec<StateId>>,
-    engine_delegate_rx: Receiver<StateEngineMessages>,
-    state_delegate_tx: Sender<StateEngineMessages>,
+    engine_delegate_rx: Receiver<StateEngineMessages<StateEvents>>,
+    state_delegate_tx: Sender<StateEngineMessages<StateEvents>>,
 }
 
-impl<StateType: StateTypeTrait> HSMEngineBuilder<StateType> {
+impl<StateType: StateTypeTrait, StateEvents: StateEventTrait>
+    HSMEngineBuilder<StateType, StateEvents>
+{
     pub fn new(
         hsm_name: String,
         top_state_id: u16,
         builder_logger_level: LevelFilter,
         engine_log_level: LevelFilter,
-    ) -> HSMEngineBuilder<StateType> {
-        let (state_delegate_tx, engine_delegate_rx) = channel::<StateEngineMessages>();
+    ) -> HSMEngineBuilder<StateType, StateEvents> {
+        let (state_delegate_tx, engine_delegate_rx) = channel::<StateEngineMessages<StateEvents>>();
         HSMEngineBuilder {
             // controller_under_construction: controller,
             unfinished_state_map: Default::default(),
@@ -517,7 +516,7 @@ impl<StateType: StateTypeTrait> HSMEngineBuilder<StateType> {
     pub fn create_delegate(
         &self,
         requested_state_for_delegate: u16,
-    ) -> HSMResult<StateEngineDelegate<StateType>, StateType> {
+    ) -> HSMResult<StateEngineDelegate<StateType, StateEvents>, StateType> {
         let state = match StateType::try_from(requested_state_for_delegate) {
             Err(_) => Err(HSMError::NotAState(requested_state_for_delegate)),
             Ok(state) => Ok(state),
@@ -546,12 +545,12 @@ impl<StateType: StateTypeTrait> HSMEngineBuilder<StateType> {
     // Hide state ID's from users!
     pub fn add_state<T: Display + Into<u16> + From<u16>>(
         mut self,
-        new_state: StateBox<StateType>,
+        new_state: StateBox<StateType, StateEvents>,
         new_state_metadata: T,
         parent_state: Option<T>,
     ) -> Self {
         let new_state_id = StateId::new(new_state_metadata.into());
-        let new_state_container: StateContainer<StateType> =
+        let new_state_container: StateContainer<StateType, StateEvents> =
             StateContainer::new(new_state_id.clone(), new_state);
         if new_state_id != self.top_state_id && parent_state.is_none() {
             panic!("You reserved StateId {} as the Tup, but state {} does not have parents. There cannot be 2 tops states!",
@@ -592,7 +591,10 @@ impl<StateType: StateTypeTrait> HSMEngineBuilder<StateType> {
     }
 
     /// Final step in process
-    pub fn init(self, initial_state_id: u16) -> HSMResult<HSMEngine<StateType>, StateType> {
+    pub fn init(
+        self,
+        initial_state_id: u16,
+    ) -> HSMResult<HSMEngine<StateType, StateEvents>, StateType> {
         let initial_state_id_struct = StateId::new(initial_state_id);
 
         let state_mapping = StateMapping::new(
@@ -624,7 +626,7 @@ mod tests {
 
     use super::*;
 
-    fn run_builder() -> HSMResult<HSMEngine<TestStates>, TestStates> {
+    fn run_builder() -> HSMResult<HSMEngine<TestStates, TestEvents>, TestStates> {
         todo!()
         // let builder = HSMEngineBuilder::<TestStates>::new(
         //     "TestHsm".to_string(),

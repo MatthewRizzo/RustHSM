@@ -1,20 +1,18 @@
-use rust_hsm::{
-    events::StateEventsIF, state::StateIF, state_engine_channel_delegate::StateEngineDelegate,
-};
+use rust_hsm::{state::StateIF, state_engine_channel_delegate::StateEngineDelegate};
 
 use crate::{
     light_events::LightEvents, light_hsm_data::LightHsmDataRef, light_states::LightStates,
 };
 
 pub(crate) struct LightStateOff {
-    delegate: StateEngineDelegate<LightStates>,
+    delegate: StateEngineDelegate<LightStates, LightEvents>,
     shared_data: LightHsmDataRef,
 }
 
 impl LightStateOff {
     pub fn new(
         shared_data: LightHsmDataRef,
-        delegate: StateEngineDelegate<LightStates>,
+        delegate: StateEngineDelegate<LightStates, LightEvents>,
     ) -> Box<Self> {
         let built_state = Box::new(Self {
             delegate,
@@ -36,11 +34,9 @@ impl LightStateOff {
     }
 }
 
-impl StateIF<LightStates> for LightStateOff {
-    fn handle_event(&mut self, event: &dyn StateEventsIF) -> bool {
-        let events: LightEvents = LightEvents::from(event);
-        // top returns true for all events
-        match events {
+impl StateIF<LightStates, LightEvents> for LightStateOff {
+    fn handle_event(&mut self, event: &LightEvents) -> bool {
+        match event {
             LightEvents::Toggle => self.handle_toggle(),
             LightEvents::TurnOn => self.handle_turn_on(),
             _ => false,

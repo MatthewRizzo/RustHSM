@@ -1,10 +1,12 @@
 ///! Contains structs and data useful across the module when running tests
 ///
 use crate::{
-    events::{HsmEvent, StateEventsIF, StatefulEvent},
+    events::StateEventTrait,
     state::{StateContainer, StateIF, StateId, StateTypeTrait},
     state_engine_channel_delegate::{StateEngineDelegate, StateEngineMessages},
 };
+
+use serde::{de::value, Deserialize, Serialize};
 // https://crates.io/crates/strum_macros
 use std::{ops::Add, sync::mpsc::Sender};
 use strum::{self, Display};
@@ -46,105 +48,49 @@ impl StateTypeTrait for TestStates {}
 
 // State impls
 
-fn build_test_delegate() -> StateEngineDelegate<TestStates> {
-    todo!()
-}
-
 pub struct Top {}
 pub struct A1Impl {}
 pub struct B1Impl {}
 pub struct A2Impl {}
 
-#[repr(u16)]
-#[derive(Copy, Clone, strum::FromRepr, Debug, Display)]
+#[derive(Serialize, Deserialize, Debug, Default)]
+pub struct FData {
+    x: i32,
+}
+
+#[derive(Debug, Display)]
 pub enum TestEvents {
-    A = 1,
-    /// Sets the light to a value from 1-100
-    B(u8) = 2,
-    C = 3,
-    D = 4,
-    E(u8) = 5,
-    F(u8) = 6,
-    InvalidNumArgs(usize) = u16::MAX - 1,
-    Invalid = u16::MAX,
+    A,
+    B(u8),
+    C,
+    D,
+    E(u8),
+    F(FData),
+    InvalidNumArgs(usize),
+    InvalidDeserialize,
+    Invalid,
 }
 
-impl From<&dyn StateEventsIF> for TestEvents {
-    fn from(event: &dyn StateEventsIF) -> Self {
-        match event.get_event_id() {
-            1 => TestEvents::A,
-            2 => {
-                let setting = event.get_args();
-                if setting.len() != 1 {
-                    TestEvents::InvalidNumArgs(setting.len())
-                } else {
-                    TestEvents::B(*setting.get(0).unwrap())
-                }
-            }
-            3 => TestEvents::C,
-            4 => TestEvents::D,
-            5 => {
-                let setting = event.get_args();
-                if setting.len() != 1 {
-                    TestEvents::InvalidNumArgs(setting.len())
-                } else {
-                    TestEvents::E(*setting.get(0).unwrap())
-                }
-            }
-            6 => {
-                let setting = event.get_args();
-                if setting.len() != 1 {
-                    TestEvents::InvalidNumArgs(setting.len())
-                } else {
-                    TestEvents::F(*setting.get(0).unwrap())
-                }
-            }
-            _ => TestEvents::Invalid,
-        }
-    }
-}
-
-impl StateEventsIF for TestEvents {
-    fn to_event_base(&self) -> HsmEvent {
-        let event_id: u16;
-        let mut event_args: Vec<u8> = vec![];
-
-        match self {
-            Self::A => event_id = 1,
-            Self::B(value) => {
-                event_id = 2;
-                event_args.push(value.clone())
-            }
-            Self::C => event_id = 3,
-            Self::D => event_id = 4,
-            Self::E(value) => {
-                event_id = 5;
-                event_args.push(value.clone())
-            }
-            Self::F(value) => {
-                event_id = 6;
-                event_args.push(value.clone())
-            }
-            Self::InvalidNumArgs(_usize) => {
-                event_id = 7;
-            }
-            Self::Invalid => event_id = 8,
-        }
-
-        HsmEvent::new(event_id, event_args)
-    }
-}
+impl StateEventTrait for TestEvents {}
 
 pub struct DummyStateStruct<TestStates: StateTypeTrait> {
     state_started: bool,
-    data: StateEngineDelegate<TestStates>,
+    data: StateEngineDelegate<TestStates, TestEvents>,
 }
 
-impl<TestStates: StateTypeTrait> StateIF<TestStates> for DummyStateStruct<TestStates> {
-    fn handle_event(&mut self, event: &StatefulEvent) -> bool {
-        let events: TestEvents = TestEvents::from(event);
-        match events {
-            _ => false,
+impl<TestStates: StateTypeTrait> StateIF<TestStates, TestEvents> for DummyStateStruct<TestStates> {
+    fn handle_event(&mut self, event: &TestEvents) -> bool {
+        // let extracted_args = event.extract_event_args();
+        match event {
+            TestEvents::A => true,
+            TestEvents::B(_) => true,
+            TestEvents::C => true,
+            TestEvents::D => true,
+            TestEvents::E(_) => true,
+            TestEvents::F(_) => true,
+            TestEvents::InvalidNumArgs(_) => true,
+            TestEvents::InvalidDeserialize => true,
+            TestEvents::Invalid => true,
         }
     }
 
@@ -161,8 +107,11 @@ impl<TestStates: StateTypeTrait> StateIF<TestStates> for DummyStateStruct<TestSt
 }
 
 impl DummyStateStruct<TestStates> {
-    fn new(num_states_created_counter: &mut u16, delegate_tx: Sender<StateEngineMessages>) -> Self {
-        let data = StateEngineDelegate::<TestStates>::new(
+    fn new(
+        num_states_created_counter: &mut u16,
+        delegate_tx: Sender<StateEngineMessages<TestEvents>>,
+    ) -> Self {
+        let data = StateEngineDelegate::<TestStates, TestEvents>::new(
             delegate_tx,
             StateId::new(num_states_created_counter.clone()),
         );
@@ -178,11 +127,11 @@ impl DummyStateStruct<TestStates> {
 pub(crate) fn fill_state_container(
     state_metadata: TestStates,
     num_states_created_counter: &mut u16,
-    delegate_tx: Sender<StateEngineMessages>,
-) -> StateContainer<TestStates> {
+    delegate_tx: Sender<StateEngineMessages<TestEvents>>,
+) -> StateContainer<TestStates, TestEvents> {
     let state_struct = DummyStateStruct::new(num_states_created_counter, delegate_tx);
 
-    let container = StateContainer::<TestStates>::new(
+    let container = StateContainer::<TestStates, TestEvents>::new(
         StateId::new(state_metadata.into()),
         Box::new(state_struct),
     );

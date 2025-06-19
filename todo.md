@@ -22,17 +22,12 @@ Main Aims:
    6. [ ] utils.rs
 5. [x] De-couple `StateChainOfResponsibility` from `StateEngineDelegate` (if possible)
 6. [x] Optimize number of borrows that occur
-7. [ ] Convert u8 buffer of `event_args` to a string that is serialized and deserialized
-   1. [ ] Can be integrated with serde
+7. [x] Convert u8 buffer of `event_args` to a string that is serialized and deserialized
+   1. Done by refactoring the entire event system to better employ enums.
 8. [x] Remove `get_state_data` from `StateIF` - Not sure possible!
-9. [ ] Create handler map in HSM controller
-    1. Now that StateIF is less cluttered, try to genericize HSmController
-    2. `HsmController<StateTrait: Rc<RefCell<dyn StateIF>>>`
-       1. Each consumer can derive a new `StateTrait` from StateIF and as as many handlers as desired!
-       2. As long as they get registered with the handler map!
-    3. Try to de-emphasize there being 1 `HandleEvent` function
-       1. controller's `handle_event(event_id)` can use something like
-       2. `StateTrait::get_evt_handler(event_id) -> Rc<dyn Fn(<serialized data type>) -> bool>`
+9. [ ] Attempt to remove dynamic dispatch of StateIF via StateBox.
+    1. Now that StateIF is less cluttered, try to generalize HsmController.
+    2. Maybe with Create handler map in HSM controller?
 10. [x] Deprecate `StateChainOfResponsibility` if possible.
     1. Play around with giving `HSMController` new members to replace it:
        1. state_map: `map<StateId, StateTrait`>
