@@ -27,12 +27,5 @@ But once that is out of the way, you can add / grow the number of states and eve
 Please look at the example [LightHsm](./example_hsm/) to see how the library
 can be consumed!
 
-## Considerations
+Some functions also have MVP examples in their docs.
 
-When events have data, you (the implementer) must manage the memory layout of
-those arguments yourself.
-You have to find a way to serialize/represent that data as a buffer of `[u8]`
-That can be understood by [StateEventTrait] and `HsmEvent`.
-
-Some convenient methods might be to use [serde](https://serde.rs/) or protobufs
-to serialize & deserialize at HSM boundaries.

@@ -146,18 +146,21 @@ impl<StateType: StateTypeTrait, StateEvents: StateEventTrait> StateMapping<State
 mod tests {
     use std::sync::mpsc::channel;
 
+    use crate::examples::*;
     use crate::test_utils::*;
     use log::LevelFilter;
 
     use super::*;
 
-    // fn do_paths_match(a: &Vec<StateContainer<TestStates>>, b: &Vec<StateContainer<TestStates>>) -> bool {
+    // fn do_paths_match(a: &Vec<StateContainer<ExampleStates>>, b: &Vec<StateContainer<ExampleStates>>) -> bool {
     fn do_paths_match(a: &Vec<StateId>, b: &Vec<StateId>) -> bool {
         let matching = a.iter().zip(b.iter()).filter(|&(a, b)| a == b).count();
         matching == a.len() && matching == b.len()
     }
 
-    fn resolve_path_to_id(path: &Vec<&StateContainer<TestStates, TestEvents>>) -> Vec<StateId> {
+    fn resolve_path_to_id(
+        path: &Vec<&StateContainer<ExampleStates, ExampleEvents>>,
+    ) -> Vec<StateId> {
         path.iter()
             .map(|container| container.state_id.clone())
             .collect()
@@ -166,28 +169,29 @@ mod tests {
     #[test]
     fn parent_link() {
         let test_logger = HSMLogger::new(LevelFilter::Trace);
-        let mut state_map = HashMap::<StateId, StateContainer<TestStates, TestEvents>>::new();
+        let mut state_map = HashMap::<StateId, StateContainer<ExampleStates, ExampleEvents>>::new();
         let mut raw_parent_map = HashMap::<StateId, StateId>::new();
         let mut num_states_created: u16 = 0;
         let (tx, _) = channel();
 
         let top_container =
-            fill_state_container(TestStates::TOP, &mut num_states_created, tx.clone());
+            fill_state_container(ExampleStates::Top, &mut num_states_created, tx.clone());
         let a1_container =
-            fill_state_container(TestStates::LevelA1, &mut num_states_created, tx.clone());
+            fill_state_container(ExampleStates::LevelA1, &mut num_states_created, tx.clone());
         let b1_container =
-            fill_state_container(TestStates::LevelB1, &mut num_states_created, tx.clone());
-        let a2_container = fill_state_container(TestStates::LevelA2, &mut num_states_created, tx);
-        state_map.insert(TestStates::TOP.into(), top_container);
-        state_map.insert(TestStates::LevelA1.into(), a1_container);
-        state_map.insert(TestStates::LevelB1.into(), b1_container);
-        state_map.insert(TestStates::LevelA2.into(), a2_container);
+            fill_state_container(ExampleStates::LevelB1, &mut num_states_created, tx.clone());
+        let a2_container =
+            fill_state_container(ExampleStates::LevelA2, &mut num_states_created, tx);
+        state_map.insert(ExampleStates::Top.into(), top_container);
+        state_map.insert(ExampleStates::LevelA1.into(), a1_container);
+        state_map.insert(ExampleStates::LevelB1.into(), b1_container);
+        state_map.insert(ExampleStates::LevelA2.into(), a2_container);
 
-        raw_parent_map.insert(TestStates::LevelA1.into(), TestStates::TOP.into());
-        raw_parent_map.insert(TestStates::LevelB1.into(), TestStates::TOP.into());
-        raw_parent_map.insert(TestStates::LevelA2.into(), TestStates::LevelA1.into());
+        raw_parent_map.insert(ExampleStates::LevelA1.into(), ExampleStates::Top.into());
+        raw_parent_map.insert(ExampleStates::LevelB1.into(), ExampleStates::Top.into());
+        raw_parent_map.insert(ExampleStates::LevelA2.into(), ExampleStates::LevelA1.into());
 
-        let mapping = StateMapping::<TestStates, TestEvents>::new(
+        let mapping = StateMapping::<ExampleStates, ExampleEvents>::new(
             state_map,
             raw_parent_map,
             Some(LevelFilter::Trace.into()),
@@ -195,33 +199,33 @@ mod tests {
         test_logger.log_info(get_function_name!(), "Assembled the mappings!");
 
         assert!(mapping
-            .get_parent_state_id(&TestStates::TOP.into())
+            .get_parent_state_id(&ExampleStates::Top.into())
             .is_none());
         assert_eq!(
             mapping
-                .get_parent_state_id(&TestStates::LevelA1.into())
+                .get_parent_state_id(&ExampleStates::LevelA1.into())
                 .unwrap(),
-            TestStates::TOP.into()
+            ExampleStates::Top.into()
         );
         assert_eq!(
             mapping
-                .get_parent_state_id(&TestStates::LevelB1.into())
+                .get_parent_state_id(&ExampleStates::LevelB1.into())
                 .unwrap(),
-            TestStates::TOP.into()
+            ExampleStates::Top.into()
         );
         assert_eq!(
             mapping
-                .get_parent_state_id(&TestStates::LevelA2.into())
+                .get_parent_state_id(&ExampleStates::LevelA2.into())
                 .unwrap(),
-            TestStates::LevelA1.into()
+            ExampleStates::LevelA1.into()
         );
 
         assert!(!mapping.is_state_id_valid(&StateId::from(7)));
-        assert!(mapping.is_state_id_valid(&TestStates::TOP.into()));
-        assert!(mapping.is_state_id_valid(&TestStates::LevelA1.into()));
-        assert!(mapping.is_state_id_valid(&TestStates::LevelB1.into()));
-        assert!(mapping.is_state_id_valid(&TestStates::LevelA2.into()));
-        assert!(!mapping.is_state_id_valid(&TestStates::INVALID.into()));
+        assert!(mapping.is_state_id_valid(&ExampleStates::Top.into()));
+        assert!(mapping.is_state_id_valid(&ExampleStates::LevelA1.into()));
+        assert!(mapping.is_state_id_valid(&ExampleStates::LevelB1.into()));
+        assert!(mapping.is_state_id_valid(&ExampleStates::LevelA2.into()));
+        assert!(!mapping.is_state_id_valid(&ExampleStates::INVALID.into()));
 
         assert!(mapping.validate_cross_states());
         test_logger.log_info(
@@ -230,10 +234,10 @@ mod tests {
         );
 
         {
-            let path = mapping.resolve_path_to_root(&TestStates::TOP.into());
+            let path = mapping.resolve_path_to_root(&ExampleStates::Top.into());
             assert!(path.is_ok());
             let id_paths = resolve_path_to_id(&path.unwrap());
-            let expected_id_path: Vec<StateId> = vec![TestStates::TOP.into()];
+            let expected_id_path: Vec<StateId> = vec![ExampleStates::Top.into()];
             assert!(
                 do_paths_match(&id_paths, &expected_id_path),
                 "expected {:?}. Received {:?} ",
@@ -242,11 +246,11 @@ mod tests {
             );
         }
         {
-            let path = mapping.resolve_path_to_root(&TestStates::LevelA1.into());
+            let path = mapping.resolve_path_to_root(&ExampleStates::LevelA1.into());
             assert!(path.is_ok());
             let id_paths = resolve_path_to_id(&path.unwrap());
             let expected_id_path: Vec<StateId> =
-                vec![TestStates::LevelA1.into(), TestStates::TOP.into()];
+                vec![ExampleStates::LevelA1.into(), ExampleStates::Top.into()];
             assert!(
                 do_paths_match(&id_paths, &expected_id_path),
                 "expected {:?}. Received {:?} ",
@@ -256,11 +260,11 @@ mod tests {
             test_logger.log_info(get_function_name!(), "A1 -> Root is good");
         }
         {
-            let path = mapping.resolve_path_to_root(&TestStates::LevelB1.into());
+            let path = mapping.resolve_path_to_root(&ExampleStates::LevelB1.into());
             assert!(path.is_ok());
             let id_paths = resolve_path_to_id(&path.unwrap());
             let expected_id_path: Vec<StateId> =
-                vec![TestStates::LevelB1.into(), TestStates::TOP.into()];
+                vec![ExampleStates::LevelB1.into(), ExampleStates::Top.into()];
             assert!(
                 do_paths_match(&id_paths, &expected_id_path),
                 "expected {:?}. Received {:?} ",
@@ -270,13 +274,13 @@ mod tests {
             test_logger.log_info(get_function_name!(), "B1 -> Root is good");
         }
         {
-            let path = mapping.resolve_path_to_root(&TestStates::LevelA2.into());
+            let path = mapping.resolve_path_to_root(&ExampleStates::LevelA2.into());
             assert!(path.is_ok());
             let id_paths = resolve_path_to_id(&path.unwrap());
             let expected_id_path: Vec<StateId> = vec![
-                TestStates::LevelA2.into(),
-                TestStates::LevelA1.into(),
-                TestStates::TOP.into(),
+                ExampleStates::LevelA2.into(),
+                ExampleStates::LevelA1.into(),
+                ExampleStates::Top.into(),
             ];
             assert!(
                 do_paths_match(&id_paths, &expected_id_path),
@@ -287,7 +291,7 @@ mod tests {
             test_logger.log_info(get_function_name!(), "A2 -> Root is good");
         }
         {
-            let path = mapping.resolve_path_to_root(&TestStates::INVALID.into());
+            let path = mapping.resolve_path_to_root(&ExampleStates::INVALID.into());
             assert!(path.is_err());
         }
     }

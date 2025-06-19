@@ -1,20 +1,16 @@
-use std::fmt::Display;
-
 use crate::state::StateId;
 
-pub(crate) fn get_state_choice<StateType: Display + Into<u16> + From<u16> + Clone>(
+pub(crate) fn get_state_choice<StateType: From<u16>>(
     state_id: &StateId,
 ) -> StateType {
     StateType::from(*state_id.get_id())
 }
 
-pub(crate) fn resolve_state_name<StateType: Display + Into<u16> + From<u16> + Clone>(
+pub(crate) fn resolve_state_name<StateType: std::fmt::Display + From<u16>>(
     state_id: &StateId,
 ) -> String {
-    get_state_choice::<StateType>(state_id)
-        .to_string()
-        .clone()
-        .to_string()
+    // get_state_choice::<StateType>(state_id).to_string()
+    format!("{}", get_state_choice::<StateType>(state_id))
 }
 
 /// Get the full path to a function from crate downwards
@@ -55,11 +51,53 @@ pub(crate) use get_function_name;
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    // Note: I use strum to simplify this / so I don't need to hand roll the conversion for From / converting to string.
+    // In your use cases, you can implement From anyway you wish.
+    // Note 2: I use PartialEq to simplify comparison in the test, but it is not strictly necessary.
+    #[repr(u16)]
+    #[derive(strum::FromRepr, PartialEq, strum::Display)]
+    enum FakeStateType
+    {
+        StateA = 1,
+        StateB = 2,
+        StateC = 3,
+        Invalid = 4
+    }
+
+    impl From<u16> for FakeStateType {
+        fn from(state_id: u16) -> Self {
+            match Self::from_repr(state_id) {
+                Some(val) => val,
+                None => Self::Invalid,
+            }
+        }
+    }
+
     #[test]
-    fn foo() {
+    fn test_function_macros() {
         let path = get_function_path!();
         let name = get_function_name!();
-        assert_eq!(path, "rust_hsm::utils::tests::foo");
-        assert_eq!(name, "tests::foo");
+        assert_eq!(path, "rust_hsm::utils::tests::test_function_macros");
+        assert_eq!(name, "tests::test_function_macros");
+    }
+
+    #[test]
+    fn test_get_state_choice()
+    {
+        assert!(get_state_choice::<FakeStateType>(&StateId::new(1)) == FakeStateType::StateA);
+        assert!(get_state_choice::<FakeStateType>(&StateId::new(2)) == FakeStateType::StateB);
+        assert!(get_state_choice::<FakeStateType>(&StateId::new(3)) == FakeStateType::StateC);
+        assert!(get_state_choice::<FakeStateType>(&StateId::new(4)) == FakeStateType::Invalid);
+    }
+
+    #[test]
+    fn test_resolve_state_name()
+    {
+        assert!(resolve_state_name::<FakeStateType>(&StateId::new(1)) == "StateA");
+        assert!(resolve_state_name::<FakeStateType>(&StateId::new(2)) == "StateB");
+        assert!(resolve_state_name::<FakeStateType>(&StateId::new(3)) == "StateC");
+        assert!(resolve_state_name::<FakeStateType>(&StateId::new(4)) == "Invalid");
     }
 }

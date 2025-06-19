@@ -30,6 +30,8 @@ pub struct HSMEngine<StateType: StateTypeTrait, StateEvents: StateEventTrait> {
     pub(crate) state_change_string: RefCell<String>,
     pub(crate) state_mapping: StateMapping<StateType, StateEvents>,
     pub(crate) logger: HSMLogger,
+    // Rx of requests from states -> hsm. Note: currently only checked while handling other events
+    // TODO - devise a method for the HSMEngine to be woken up if any requests come in
     state_proxy_requests: Receiver<StateEngineMessages<StateEvents>>,
     // This is risky and could lead to us getting stuck!
     pending_events: Vec<StateEvents>,
@@ -180,6 +182,8 @@ impl<StateType: StateTypeTrait, StateEvents: StateEventTrait> HSMEngine<StateTyp
     /// end of handling the current event.
     /// * Follows the ethos of "run current task to completion"
     fn process_proxy_requests(&mut self, current_event: &StateEvents) -> HSMResult<(), StateType> {
+        // TODO - right now, this only gets woken up if an external consumer sends an event
+        // It should also be woken up if anyone puts a request on the channel.
         loop {
             let req = match self.state_proxy_requests.recv_timeout(Duration::new(0, 0)) {
                 Err(_) => break, // all proxy requests have been processed! We are done!
@@ -442,6 +446,7 @@ impl<StateType: StateTypeTrait, StateEvents: StateEventTrait> HSMEngine<StateTyp
     }
 
     // TODO consider putting this into a channel as well so that
+    /// Main API for consumers of the HSM to fire events into it.
     pub fn dispatch_event(&mut self, event: StateEvents) -> HSMResult<(), StateType> {
         // Override for a more custom implementation
         if self.pending_events.len() > 0 {
@@ -623,39 +628,59 @@ impl<StateType: StateTypeTrait, StateEvents: StateEventTrait>
 #[cfg(test)]
 mod tests {
     use crate::test_utils::*;
+    use crate::examples::*;
 
-    use super::*;
-
-    fn run_builder() -> HSMResult<HSMEngine<TestStates, TestEvents>, TestStates> {
-        todo!()
-        // let builder = HSMEngineBuilder::<TestStates>::new(
-        //     "TestHsm".to_string(),
-        //     TestStates::LevelA1 as u16,
-        //     LevelFilter::Info,
-        //     LevelFilter::Info
-        // );
-        // builder
-        //     .add_state(new_state, new_state_metadata, parent_state)
+    #[test]
+    fn handle_state_change() {
+        let _ = build_test_hsm(ExampleStates::Top);
     }
 
     #[test]
-    fn set_current_state() {
-        todo!()
+    fn handle_single_proxy_request() {
+        let _ = build_test_hsm(ExampleStates::Top);
     }
 
     #[test]
-    fn init() {
-        let _ = run_builder();
-        todo!()
+    fn process_proxy_requests()
+    {
+
     }
 
     #[test]
-    fn exit_states_until_target() {
-        todo!()
+    fn handle_event_internally() {
+        // todo!()
+    }
+
+    #[test]
+    fn dispatch_event()
+    {
+
     }
 
     #[test]
     fn find_lca() {
-        todo!()
+        // todo!()
+    }
+
+
+    #[test]
+    fn enter_states_lca_to_target()
+    {
+
+    }
+
+    #[test]
+    fn exit_states_until_target()
+    {
+
+    }
+
+    /// In particular, test multi-thread scenarios where concurrently:
+    ///     1) External threads send events to the HSM.
+    ///     2) States of the HSM fire events into the HSM while handling current events.
+    #[test]
+    fn test_many_queued_events()
+    {
+
     }
 }

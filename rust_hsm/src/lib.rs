@@ -7,5 +7,7 @@ pub mod state_engine_channel_delegate;
 mod state_mapping;
 mod utils;
 
+pub mod examples;
+
 #[cfg(test)]
-mod test_utils;
+pub mod test_utils;
