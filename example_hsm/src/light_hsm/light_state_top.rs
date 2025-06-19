@@ -1,4 +1,4 @@
-use rust_hsm::{events::StateEventsIF, state::StateIF};
+use rust_hsm::state::StateIF;
 
 use crate::{
     light_events::LightEvents, light_hsm_data::LightHsmDataRef, light_states::LightStates,
@@ -17,11 +17,10 @@ impl LightStateTop {
     }
 }
 
-impl StateIF<LightStates> for LightStateTop {
-    fn handle_event(&mut self, event: &dyn StateEventsIF) -> bool {
-        let events: LightEvents = LightEvents::from(event);
+impl StateIF<LightStates, LightEvents> for LightStateTop {
+    fn handle_event(&mut self, event: &LightEvents) -> bool {
         // top returns true for all events
-        match events {
+        match event {
             _ => true,
         }
     }

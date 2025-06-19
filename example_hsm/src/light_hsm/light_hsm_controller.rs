@@ -16,7 +16,7 @@ use crate::light_hsm::{
 use log;
 
 pub struct LightControllerHsm {
-    hsm: HSMEngine<LightStates>,
+    hsm: HSMEngine<LightStates, LightEvents>,
     /// Again...leaking this is a bad idea. It is only done here for testing/asserting
     /// Do NOT do this in a real HSM
     pub(crate) _shared_data: LightHsmDataRef,
@@ -89,8 +89,7 @@ impl LightControllerHsm {
 
     pub(crate) fn dispatch_into_hsm(&mut self, event: LightEvents) -> HSMResult<(), LightStates> {
         // In a real system you would want to translate from HSMResult -> your result
-        let stateful_event_box = Box::new(event);
-        self.hsm.dispatch_event(stateful_event_box)
+        self.hsm.dispatch_event(event)
     }
 
     /// In a real HSM this is a BAD idea. DO NOT LEAK the data

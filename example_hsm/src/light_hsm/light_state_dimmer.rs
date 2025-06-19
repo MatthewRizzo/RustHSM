@@ -1,6 +1,4 @@
-use rust_hsm::{
-    events::StateEventsIF, state::StateIF, state_engine_channel_delegate::StateEngineDelegate,
-};
+use rust_hsm::{state::StateIF, state_engine_channel_delegate::StateEngineDelegate};
 
 use crate::{
     light_events::LightEvents,
@@ -9,14 +7,14 @@ use crate::{
 };
 
 pub(crate) struct LightStateDimmer {
-    delegate: StateEngineDelegate<LightStates>,
+    delegate: StateEngineDelegate<LightStates, LightEvents>,
     shared_data: LightHsmDataRef,
 }
 
 impl LightStateDimmer {
     pub fn new(
         shared_data: LightHsmDataRef,
-        delegate: StateEngineDelegate<LightStates>,
+        delegate: StateEngineDelegate<LightStates, LightEvents>,
     ) -> Box<Self> {
         let built_state = Box::new(Self {
             delegate,
@@ -29,10 +27,9 @@ impl LightStateDimmer {
     fn set_to_percentage(&mut self, percentage: u8) -> bool {
         let event_res: bool = if percentage == 0 {
             self.delegate
-                .dispatch_event_internally(Box::new(LightEvents::TurnOff))
+                .dispatch_event_internally(LightEvents::TurnOff)
         } else if percentage >= 100 {
-            self.delegate
-                .dispatch_event_internally(Box::new(LightEvents::TurnOn))
+            self.delegate.dispatch_event_internally(LightEvents::TurnOn)
         } else {
             Ok(())
         }
@@ -49,17 +46,16 @@ impl LightStateDimmer {
     }
 }
 
-impl StateIF<LightStates> for LightStateDimmer {
-    fn handle_event(&mut self, event_id: &dyn StateEventsIF) -> bool {
-        let events: LightEvents = LightEvents::from(event_id);
+impl StateIF<LightStates, LightEvents> for LightStateDimmer {
+    fn handle_event(&mut self, event: &LightEvents) -> bool {
         // top returns true for all events
-        match events {
-            LightEvents::Set(percentage) => self.set_to_percentage(percentage),
+        match event {
+            LightEvents::Set(percentage) => self.set_to_percentage(*percentage),
             LightEvents::ReduceByPercent(percentage) => {
-                self.set_relative(LightAdjustment::Decrease, percentage)
+                self.set_relative(LightAdjustment::Decrease, *percentage)
             }
             LightEvents::IncreaseByPercent(percentage) => {
-                self.set_relative(LightAdjustment::Increase, percentage)
+                self.set_relative(LightAdjustment::Increase, *percentage)
             }
             // TurnOff and Toggle are implemented by our parent (LightStateOn)
             // Leverage that behavior by not handling them

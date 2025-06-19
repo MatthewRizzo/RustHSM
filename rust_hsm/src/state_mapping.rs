@@ -5,14 +5,15 @@ use std::collections::HashMap;
 
 use crate::{
     errors::{HSMError, HSMResult},
+    events::StateEventTrait,
     logger::HSMLogger,
     state::{StateContainer, StateId, StateTypeTrait},
     utils::get_function_name,
 };
 
-pub(crate) struct StateMapping<StateType: StateTypeTrait> {
+pub(crate) struct StateMapping<StateType: StateTypeTrait, StateEvents: StateEventTrait> {
     // state id -> state
-    state_map: HashMap<StateId, StateContainer<StateType>>,
+    state_map: HashMap<StateId, StateContainer<StateType, StateEvents>>,
     /// stateid -> parent state
     /// If the node has a parent, it is in the map!
     /// If it is not present....it is an orphan (Top)
@@ -20,9 +21,9 @@ pub(crate) struct StateMapping<StateType: StateTypeTrait> {
     logger: HSMLogger,
 }
 
-impl<StateType: StateTypeTrait> StateMapping<StateType> {
+impl<StateType: StateTypeTrait, StateEvents: StateEventTrait> StateMapping<StateType, StateEvents> {
     pub(crate) fn new(
-        state_map: HashMap<StateId, StateContainer<StateType>>,
+        state_map: HashMap<StateId, StateContainer<StateType, StateEvents>>,
         raw_state_parent_map: HashMap<StateId, StateId>,
         logger: Option<HSMLogger>,
     ) -> Self {
@@ -35,7 +36,10 @@ impl<StateType: StateTypeTrait> StateMapping<StateType> {
         }
     }
 
-    pub(crate) fn get_state_container(&self, id: &StateId) -> Option<&StateContainer<StateType>> {
+    pub(crate) fn get_state_container(
+        &self,
+        id: &StateId,
+    ) -> Option<&StateContainer<StateType, StateEvents>> {
         match self.state_map.get(&id) {
             None => None,
             Some(state) => Some(state),
@@ -55,13 +59,13 @@ impl<StateType: StateTypeTrait> StateMapping<StateType> {
     pub(crate) fn resolve_path_to_root(
         &self,
         start_node: &StateId,
-    ) -> HSMResult<Vec<&StateContainer<StateType>>, StateType> {
+    ) -> HSMResult<Vec<&StateContainer<StateType, StateEvents>>, StateType> {
         let mut current_node_id = start_node.clone();
         let current_node = self
             .state_map
             .get(&start_node)
             .ok_or_else(|| HSMError::InvalidStateId(StateType::from(*start_node.get_id())))?;
-        let mut path_to_root: Vec<&StateContainer<StateType>> = vec![current_node];
+        let mut path_to_root: Vec<&StateContainer<StateType, StateEvents>> = vec![current_node];
 
         loop {
             self.logger.log_debug(
@@ -85,7 +89,7 @@ impl<StateType: StateTypeTrait> StateMapping<StateType> {
                             StateType::from(*parent_id.get_id()),
                         )
                     })?;
-                    path_to_root.push(parent_node.clone());
+                    path_to_root.push(parent_node);
                     self.logger.log_debug(
                         get_function_name!(),
                         format!(
@@ -153,7 +157,7 @@ mod tests {
         matching == a.len() && matching == b.len()
     }
 
-    fn resolve_path_to_id(path: &Vec<&StateContainer<TestStates>>) -> Vec<StateId> {
+    fn resolve_path_to_id(path: &Vec<&StateContainer<TestStates, TestEvents>>) -> Vec<StateId> {
         path.iter()
             .map(|container| container.state_id.clone())
             .collect()
@@ -162,7 +166,7 @@ mod tests {
     #[test]
     fn parent_link() {
         let test_logger = HSMLogger::new(LevelFilter::Trace);
-        let mut state_map = HashMap::<StateId, StateContainer<TestStates>>::new();
+        let mut state_map = HashMap::<StateId, StateContainer<TestStates, TestEvents>>::new();
         let mut raw_parent_map = HashMap::<StateId, StateId>::new();
         let mut num_states_created: u16 = 0;
         let (tx, _) = channel();
@@ -183,7 +187,7 @@ mod tests {
         raw_parent_map.insert(TestStates::LevelB1.into(), TestStates::TOP.into());
         raw_parent_map.insert(TestStates::LevelA2.into(), TestStates::LevelA1.into());
 
-        let mapping = StateMapping::<TestStates>::new(
+        let mapping = StateMapping::<TestStates, TestEvents>::new(
             state_map,
             raw_parent_map,
             Some(LevelFilter::Trace.into()),

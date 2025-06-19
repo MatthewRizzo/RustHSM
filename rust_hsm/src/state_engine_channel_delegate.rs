@@ -2,7 +2,7 @@
 ///! throughout the library but is obscured to consumers
 use crate::{
     errors::{HSMError, HSMResult},
-    events::StatefulEventBox,
+    events::StateEventTrait,
     state::{StateId, StateTypeTrait},
 };
 
@@ -10,9 +10,9 @@ use std::{marker::PhantomData, sync::mpsc::Sender};
 
 type RequestingStateId = StateId;
 
-pub(crate) enum StateEngineMessages {
+pub(crate) enum StateEngineMessages<StateEvents> {
     ChangeState(RequestingStateId, StateId),
-    FireEvent(RequestingStateId, StatefulEventBox),
+    FireEvent(RequestingStateId, StateEvents),
 }
 
 /// # What is this?
@@ -81,8 +81,8 @@ pub(crate) enum StateEngineMessages {
 ///     .init(TestStates::LevelA1)
 ///     .unwrap();
 /// ```
-pub struct StateEngineDelegate<StateType: StateTypeTrait> {
-    pub(crate) sender_to_engine: Sender<StateEngineMessages>,
+pub struct StateEngineDelegate<StateType: StateTypeTrait, StateEvents: StateEventTrait> {
+    pub(crate) sender_to_engine: Sender<StateEngineMessages<StateEvents>>,
     /// Think of this like a user-agent and or a token to provide the engine for
     /// each request!
     delegated_state_id: StateId,
@@ -91,9 +91,11 @@ pub struct StateEngineDelegate<StateType: StateTypeTrait> {
 
 /// # Params
 /// * delegated_state_id the Id of the state requesting this delegate!
-impl<StateType: StateTypeTrait> StateEngineDelegate<StateType> {
+impl<StateType: StateTypeTrait, StateEvents: StateEventTrait>
+    StateEngineDelegate<StateType, StateEvents>
+{
     pub(crate) fn new(
-        sender_to_engine: Sender<StateEngineMessages>,
+        sender_to_engine: Sender<StateEngineMessages<StateEvents>>,
         delegated_state_id: StateId,
     ) -> Self {
         Self {
@@ -123,10 +125,7 @@ impl<StateType: StateTypeTrait> StateEngineDelegate<StateType> {
             .map_err(|_| HSMError::DelegateNotConnected())
     }
 
-    pub fn dispatch_event_internally(
-        &mut self,
-        event: StatefulEventBox,
-    ) -> HSMResult<(), StateType> {
+    pub fn dispatch_event_internally(&mut self, event: StateEvents) -> HSMResult<(), StateType> {
         let evt = StateEngineMessages::FireEvent(self.delegated_state_id.clone(), event);
         self.sender_to_engine
             .send(evt)

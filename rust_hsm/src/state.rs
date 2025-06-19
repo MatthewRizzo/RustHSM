@@ -1,7 +1,7 @@
 ///! This file contains the logic for an individual state and how they link together
 use std::{boxed::Box, cell::RefCell, fmt::Display};
 
-use crate::events::StatefulEvent;
+use crate::events::StateEventTrait;
 
 /// All valid definitions of a 'class' of state's must be StateTypes.
 /// By enforcing these characteristics, the Engine can translate from its
@@ -40,9 +40,9 @@ impl From<u16> for StateId {
 }
 
 /// The State reference accepted as inputs for the controller to manage
-pub type StateBox<StateType> = Box<dyn StateIF<StateType>>;
+pub type StateBox<StateType, StateEvents> = Box<dyn StateIF<StateType, StateEvents>>;
 
-pub trait StateIF<StateType: StateTypeTrait> {
+pub trait StateIF<StateType: StateTypeTrait, StateEvents: StateEventTrait> {
     /// Called whenever state is entered (even if transiently).
     /// If multiple states are traveled through, it is called multiple times
     /// by every relevant state
@@ -59,17 +59,19 @@ pub trait StateIF<StateType: StateTypeTrait> {
     /// # Return
     /// * True if handled. Do not keep handling
     /// * False if not handled and should be delegated to a higher state.
-    fn handle_event(&mut self, event_id: &StatefulEvent) -> bool;
+    fn handle_event(&mut self, event: &StateEvents) -> bool;
 }
 
 /// All elements are cheap data structure or those with copy/clone/rc semantics
-pub(crate) struct StateContainer<StateType: StateTypeTrait> {
-    pub state_ref: RefCell<StateBox<StateType>>,
+pub(crate) struct StateContainer<StateType: StateTypeTrait, StateEvents: StateEventTrait> {
+    pub state_ref: RefCell<StateBox<StateType, StateEvents>>,
     pub state_id: StateId,
 }
 
-impl<StateType: StateTypeTrait> StateContainer<StateType> {
-    pub(crate) fn new(state_id: StateId, state_ref: StateBox<StateType>) -> Self {
+impl<StateType: StateTypeTrait, StateEvents: StateEventTrait>
+    StateContainer<StateType, StateEvents>
+{
+    pub(crate) fn new(state_id: StateId, state_ref: StateBox<StateType, StateEvents>) -> Self {
         Self {
             state_ref: RefCell::new(state_ref),
             state_id,
