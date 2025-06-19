@@ -28,14 +28,14 @@ impl LightControllerHsm {
 
         let engine_builder = HSMEngineBuilder::new(
             "LightControllerHsm".to_string(),
-            LightStates::TOP as u16,
+            LightStates::Top as u16,
             log::LevelFilter::Info,
             engine_log_level,
         );
 
         #[allow(unused)] // Not every state needs a delegate! But you can acquire it!
         let top_delegate = engine_builder
-            .create_delegate(LightStates::TOP.into())
+            .create_delegate(LightStates::Top.into())
             .expect("");
         let on_delegate = engine_builder
             .create_delegate(LightStates::ON.into())
@@ -46,7 +46,6 @@ impl LightControllerHsm {
         let dimmer_delegate = engine_builder
             .create_delegate(LightStates::DIMMER.into())
             .expect("");
-        // .expect_err("Requesting the same delegate twice is illegal!");
         assert!(
             engine_builder
                 .create_delegate(LightStates::ON.into())
@@ -64,9 +63,9 @@ impl LightControllerHsm {
         let state_off = LightStateOff::new(shared_data.clone(), dimmer_delegate);
 
         let hsm = engine_builder
-            .add_state(top_state, LightStates::TOP, None)
-            .add_state(state_on, LightStates::ON, Some(LightStates::TOP))
-            .add_state(state_off, LightStates::OFF, Some(LightStates::TOP))
+            .add_state(top_state, LightStates::Top, None)
+            .add_state(state_on, LightStates::ON, Some(LightStates::Top))
+            .add_state(state_off, LightStates::OFF, Some(LightStates::Top))
             .add_state(state_dimmer, LightStates::DIMMER, Some(LightStates::ON))
             .init(LightStates::DIMMER as u16)
             .unwrap();

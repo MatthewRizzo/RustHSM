@@ -7,7 +7,7 @@ use rust_hsm::state::StateTypeTrait;
 #[derive(strum::AsRefStr, strum::FromRepr, Display, Clone, PartialEq, Debug)]
 pub(crate) enum LightStates {
     INVALID = u16::MAX,
-    TOP = 1,
+    Top = 1,
     ON = 2,
     OFF = 3,
     DIMMER = 4,

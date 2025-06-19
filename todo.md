@@ -10,14 +10,19 @@ Main Aims:
 
 1. [ ] Apply clippy suggestions - do last!
 2. [ ] Add actual tests!
-   1. [ ] state.rs
-   2. [ ] state_engine_channel_delegate.rs
-   3. [ ] events.rs
-   4. [ ] state_engine.rs
-   5. [x] state_mapping.rs
-   6. [ ] utils.rs
-3. [ ] Attempt to remove dynamic dispatch of StateIF via StateBox.
-    1. Now that StateIF is less cluttered, try to generalize HsmController.
-    2. Maybe with Create handler map in HSM controller?
-4. [ ] Try replacing some `format!` with `write!` if it improves performance
-5. [ ] Define macro to do boilerplate code for impl of state enum trait(s)
+   1. [x] state_engine_channel_delegate.rs
+   2. [ ] state_engine.rs
+   3. [x] state_mapping.rs
+   4. [x] utils.rs
+3. [ ] Define macro to do boilerplate code for impl of state enum trait(s)
+4. [ ] Devise a method for the hsm to be woken up if anyone puts a request on the queue
+   1. [ ] Probably requires moving ALL requests to the channel
+   2. [ ] Maybe a notification mechanism waking up the HSMEngine to start processing the events
+   3. [ ] For example tokio [Notify](https://docs.rs/tokio/latest/tokio/sync/struct.Notify.html)
+   4. Delegates / public API's of the HSMEngine will notify
+   5. The HSMEngine will await the notification when idle
+   6. Why? Right now, states cannot asynchronously fire events back at the hsm.
+      1. They can do so while processing, but not after.
+      2. In otherwords, they would need to orchestrate a re-direction of async events externally
+      3. If they do not do this, it will not be handled until the NEXT time an external consumer fires
+      4. Moreover, it will be handled out of order
