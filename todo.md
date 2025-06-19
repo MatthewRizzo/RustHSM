@@ -14,6 +14,12 @@ Main Aims:
 3. [x] Try to remove the `Rc`'s / `RefCell's` if possible.
    1. Now that we know the impl works, try to minimize as much of the "cludge" as possible
 4. [ ] Add actual tests!
+   1. [ ] state.rs
+   2. [ ] state_engine_channel_delegate.rs
+   3. [ ] events.rs
+   4. [ ] state_engine.rs
+   5. [x] state_mapping.rs
+   6. [ ] utils.rs
 5. [x] De-couple `StateChainOfResponsibility` from `StateEngineDelegate` (if possible)
 6. [x] Optimize number of borrows that occur
 7. [ ] Convert u8 buffer of `event_args` to a string that is serialized and deserialized
@@ -22,7 +28,7 @@ Main Aims:
 9. [ ] Create handler map in HSM controller
     1. Now that StateIF is less cluttered, try to genericize HSmController
     2. `HsmController<StateTrait: Rc<RefCell<dyn StateIF>>>`
-       1. Each consumer can derive a new `StateTrait` from StateIF and ass as many handlers as desired!
+       1. Each consumer can derive a new `StateTrait` from StateIF and as as many handlers as desired!
        2. As long as they get registered with the handler map!
     3. Try to de-emphasize there being 1 `HandleEvent` function
        1. controller's `handle_event(event_id)` can use something like
