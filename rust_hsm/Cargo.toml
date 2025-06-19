@@ -8,3 +8,4 @@ edition = "2021"
 thiserror = "1.0.51"
 strum = { version = "0.26.3", features = ["derive"]}
 log = "0.4.22"
+tokio = { version = "1.45.1", features = ["sync", "macros", "rt"] }

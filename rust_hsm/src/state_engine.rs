@@ -13,17 +13,16 @@ use core::fmt::Display;
 use log::LevelFilter;
 
 use std::{
-    cell::RefCell,
-    collections::HashMap,
-    default::Default,
+    cell::RefCell, collections::HashMap, default::Default, fmt::format, future::Future,
     marker::PhantomData,
-    sync::mpsc::{channel, Receiver, Sender},
-    time::Duration,
+};
+use tokio::sync::{
+    mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+    RwLock,
 };
 
 /// Runs the orchestration of the state 'machine' while considering its hierarchy/
-// TODO - add a generic for state events too!
-pub struct HSMEngine<StateType: StateTypeTrait, StateEvents: StateEventTrait> {
+pub(crate) struct HSMEngine<StateType: StateTypeTrait, StateEvents: StateEventTrait> {
     pub(crate) hsm_name: String,
     pub(crate) current_state: StateId,
     /// Used to cache the current known sequence of events
@@ -32,21 +31,22 @@ pub struct HSMEngine<StateType: StateTypeTrait, StateEvents: StateEventTrait> {
     pub(crate) logger: HSMLogger,
     // Rx of requests from states -> hsm. Note: currently only checked while handling other events
     // TODO - devise a method for the HSMEngine to be woken up if any requests come in
-    state_proxy_requests: Receiver<StateEngineMessages<StateEvents>>,
-    // This is risky and could lead to us getting stuck!
-    pending_events: Vec<StateEvents>,
+    state_proxy_requests: UnboundedReceiver<StateEngineMessages<StateType, StateEvents>>,
+    // Used for internal loopback requests
+    already_running: RwLock<bool>,
     pub(crate) phantom_state_enum: PhantomData<StateType>,
 }
 
 impl<StateType: StateTypeTrait, StateEvents: StateEventTrait> HSMEngine<StateType, StateEvents> {
     /// Create an HSM engine.
     /// Highly recommend NOT exposing the HSMEngine beyond your container.
+    /// # Params
     pub(crate) fn new(
         hsm_name: String,
         logger: HSMLogger,
         starting_state: StateId,
         state_mapping: StateMapping<StateType, StateEvents>,
-        state_proxy_requests: Receiver<StateEngineMessages<StateEvents>>,
+        state_proxy_requests: UnboundedReceiver<StateEngineMessages<StateType, StateEvents>>,
     ) -> HSMResult<HSMEngine<StateType, StateEvents>, StateType> {
         logger.log_info(
             get_function_name!(),
@@ -64,22 +64,16 @@ impl<StateType: StateTypeTrait, StateEvents: StateEventTrait> HSMEngine<StateTyp
             state_mapping,
             logger,
             state_proxy_requests,
-            pending_events: Default::default(),
+            already_running: RwLock::new(false),
             phantom_state_enum: PhantomData,
         };
         engine.enter_states_lca_to_target(starting_state, true)?;
         Ok(engine)
     }
 
-    pub fn get_current_state(&self) -> HSMResult<StateType, StateType> {
-        let state_id = self.current_state.clone();
-        let state: StateType = state_id.get_id().clone().into();
-        Ok(state)
-    }
-
     /// Send an event into the HSM from within the HSM.
     /// i.e. a state fires an event while handling another event
-    fn handle_event_internally(&mut self, event: StateEvents) -> HSMResult<(), StateType> {
+    fn handle_event_internally(&mut self, event: &StateEvents) -> HSMResult<(), StateType> {
         // keep going until event is handled (true) or we reach the end
 
         // State id is the variable updated each loop!
@@ -94,15 +88,14 @@ impl<StateType: StateTypeTrait, StateEvents: StateEventTrait> HSMEngine<StateTyp
 
         let hsm_name = self.get_hsm_name();
         self.clear_state_change_string();
-        self.update_state_change_string(
-            format!(
-                "{}: {}({}): ",
-                hsm_name,
-                resolve_state_name::<StateType>(&current_state_id),
-                event
-            )
-            .as_str(),
+        let evt_string = format!(
+            "{}: {}({}): ",
+            hsm_name,
+            resolve_state_name::<StateType>(&current_state_id),
+            event
         );
+        self.update_state_change_string(&evt_string);
+        self.logger.log_debug(get_function_name!(), &evt_string);
 
         loop {
             let current_state_container =
@@ -114,7 +107,8 @@ impl<StateType: StateTypeTrait, StateEvents: StateEventTrait> HSMEngine<StateTyp
             let event_name = event.get_event_name().clone();
             let is_handled = current_state_container
                 .state_ref
-                .borrow_mut()
+                .lock()
+                .unwrap() // We only access one state at a time so it is safe
                 .handle_event(&event);
 
             if is_handled {
@@ -161,85 +155,108 @@ impl<StateType: StateTypeTrait, StateEvents: StateEventTrait> HSMEngine<StateTyp
             current_state_id = next_state.get_state_id().clone();
         }
 
-        self.process_proxy_requests(&event)?;
+        Ok(())
+    }
+    // Main entryway into the hsm. Should only be called once!
+    async fn run_state_engine(&mut self) -> HSMResult<(), StateType> {
+        {
+            let mut rw_guard = self.already_running.write().await;
+            if *rw_guard == true {
+                return Err(HSMError::RunnableOnce());
+            }
 
-        // Check for pending events! Doing this ensures we will always handle all pending events!
-        // TODO - Is there a way we could do this asynchronously / non-recursively?
-        match self.pending_events.pop() {
-            None => Ok(()),
-            Some(pending_event) => self.handle_event_internally(pending_event),
+            *rw_guard = true;
         }
-    }
 
-    pub fn get_state_name(&self, state_id: &u16) -> HSMResult<String, StateType> {
-        let name = StateType::from(*state_id).to_string();
-        Ok(name)
-    }
+        self.logger.log_info(
+            get_function_name!(),
+            "Starting to run engine. Waiting for events",
+        );
 
-    /// Check the rx end of the delegate channel for any requests from states!
-    /// # Note
-    /// * This implicitly defers all state changes and event firings until the
-    /// end of handling the current event.
-    /// * Follows the ethos of "run current task to completion"
-    fn process_proxy_requests(&mut self, current_event: &StateEvents) -> HSMResult<(), StateType> {
         // TODO - right now, this only gets woken up if an external consumer sends an event
         // It should also be woken up if anyone puts a request on the channel.
-        loop {
-            let req = match self.state_proxy_requests.recv_timeout(Duration::new(0, 0)) {
-                Err(_) => break, // all proxy requests have been processed! We are done!
-                Ok(req) => req,
+        while let Some(req) = self.state_proxy_requests.recv().await {
+            match self.handle_single_proxy_request(req) {
+                Ok(()) => {}
+                Err(err) => {
+                    self.logger.log_error(
+                        "handle_single_proxy_request".to_string(),
+                        &format!("Failed to process an event: {}", err),
+                    );
+                }
             };
-
-            // Only allow 1 state change per time this function is called!
-            // Changing state multiple times per singular event handled could lead
-            // to UB/race conditions on consumer HSM's.
-            // .....unless should we trust consumers to not foot-gun themselves?
-            let mut already_changed_state = false;
-            self.handle_single_proxy_request(req, &current_event, &mut already_changed_state)?;
         }
 
-        self.post_handle_event_operations();
         Ok(())
     }
 
+    /// Handles a single event that came off the queue/channel
     fn handle_single_proxy_request(
         &mut self,
-        req: StateEngineMessages<StateEvents>,
-        current_event: &StateEvents,
-        already_changed_state: &mut bool,
+        req: StateEngineMessages<StateType, StateEvents>,
     ) -> HSMResult<(), StateType> {
         match req {
             StateEngineMessages::ChangeState(requesting_state, new_state) => {
-                if *already_changed_state == true {
-                    let err = HSMError::MultipleConcurrentChangeState(
-                        StateType::from(*requesting_state.get_id()),
-                        StateType::from(*self.current_state.get_id()),
-                        current_event.get_event_name(),
-                    );
-                    if cfg!(test) {
-                        assert!(false, "{}", err);
-                        return Err(err);
-                    } else {
-                        return Err(err);
-                    }
-                }
-                *already_changed_state = true;
-                self.handle_state_change(new_state.clone())?;
-            }
-            StateEngineMessages::FireEvent(requesting_state, new_evt) => {
-                let state_type = StateType::from(*requesting_state.get_id());
-                self.update_state_change_string(
+                let requesting_state_type = StateType::from(*requesting_state.get_id());
+                let new_state_type = StateType::from(*new_state.get_id());
+                self.logger.log_info(
+                    get_function_name!(),
                     format!(
-                        "[State {}: Adding event {} to queue]",
-                        state_type,
-                        new_evt.get_event_name()
+                        "ChangeState({} >> {}) Requested",
+                        requesting_state_type, new_state_type
                     )
                     .as_str(),
                 );
-                self.pending_events.push(new_evt);
+                self.handle_state_change(new_state.clone())?;
+                assert!(self.current_state == new_state);
+                self.logger
+                    .log_debug(get_function_name!(), "Done handling change state!");
+                Ok(())
+            }
+            StateEngineMessages::FireEvent(requesting_state, new_evt, on_complete_cb) => {
+                let state_type = StateType::from(*requesting_state.get_id());
+                self.logger.log_info(
+                    get_function_name!(),
+                    format!(
+                        "Start - State '{}' Requests Event '{}'",
+                        state_type, new_evt
+                    )
+                    .as_str(),
+                );
+
+                // After this point we are done with any change state from requests
+                self.handle_event_internally(&new_evt)?;
+                self.logger.log_info(
+                    get_function_name!(),
+                    format!(
+                        "Done - State '{}' Requests Event '{}'",
+                        state_type, &new_evt
+                    )
+                    .as_str(),
+                );
+                on_complete_cb.send(()).map_err(|_| {
+                    HSMError::<StateType>::CallbackResponseNeverSentError(
+                        format!("FireEvent response failed to send for event {}", new_evt)
+                            .to_string(),
+                    )
+                })?;
+                Ok(())
+            }
+            StateEngineMessages::GetCurrentState(response_cb) => {
+                let state_id = self.current_state.clone();
+                let state: StateType = state_id.get_id().clone().into();
+                self.logger.log_info(
+                    get_function_name!(),
+                    &format!("GetCurrentState Requested. It is {}", state),
+                );
+                response_cb.send(state).map_err(|failed_send| {
+                    HSMError::CallbackResponseNeverSentError(
+                        format!("GetCurrentState response failed to send: {}", failed_send)
+                            .to_string(),
+                    )
+                })
             }
         }
-        Ok(())
     }
 
     /// # Brief
@@ -281,6 +298,8 @@ impl<StateType: StateTypeTrait, StateEvents: StateEventTrait> HSMEngine<StateTyp
         self.enter_states_lca_to_target(requested_state, false)?;
 
         self.set_current_state(&target_state_id)?;
+
+        self.post_handle_event_operations();
 
         Ok(())
     }
@@ -363,7 +382,8 @@ impl<StateType: StateTypeTrait, StateEvents: StateEventTrait> HSMEngine<StateTyp
 
             current_state_container
                 .state_ref
-                .borrow_mut()
+                .lock()
+                .unwrap()
                 .handle_state_exit();
 
             let next_state_id = self.state_mapping.get_parent_state_id(
@@ -413,7 +433,8 @@ impl<StateType: StateTypeTrait, StateEvents: StateEventTrait> HSMEngine<StateTyp
                 })?;
             state_to_enter_container
                 .state_ref
-                .borrow_mut()
+                .lock()
+                .unwrap()
                 .handle_state_enter();
 
             let state_to_enter_name =
@@ -428,7 +449,8 @@ impl<StateType: StateTypeTrait, StateEvents: StateEventTrait> HSMEngine<StateTyp
         // Start the target state!
         target_state_container
             .state_ref
-            .borrow_mut()
+            .lock()
+            .unwrap()
             .handle_state_start();
         self.logger.log_trace(
             get_function_name!(),
@@ -441,20 +463,12 @@ impl<StateType: StateTypeTrait, StateEvents: StateEventTrait> HSMEngine<StateTyp
     /// Operations to be performed after handling an event, regardless of outcome!
     fn post_handle_event_operations(&mut self) {
         // Log the current chain and reset the message
-        println!("{}", self.state_change_string.borrow());
+        // println!("{}", self.state_change_string.borrow());
+        self.logger.log_info(
+            "handle_state_change".to_string(),
+            &format!("{}", self.state_change_string.borrow()),
+        );
         self.clear_state_change_string();
-    }
-
-    // TODO consider putting this into a channel as well so that
-    /// Main API for consumers of the HSM to fire events into it.
-    pub fn dispatch_event(&mut self, event: StateEvents) -> HSMResult<(), StateType> {
-        // Override for a more custom implementation
-        if self.pending_events.len() > 0 {
-            self.pending_events.push(event);
-            Ok(())
-        } else {
-            self.handle_event_internally(event)
-        }
     }
 
     fn set_current_state(&mut self, new_current_state: &StateId) -> HSMResult<(), StateType> {
@@ -475,6 +489,47 @@ impl<StateType: StateTypeTrait, StateEvents: StateEventTrait> HSMEngine<StateTyp
     }
 }
 
+/// Main interface to the engine that consumers interact with once the engine is started.
+/// Limits what operations it supports to just dispatching, on purpose!
+/// However, it is also clone-able to have multiple accessors to the engine
+pub struct HSMInterface<StateType: StateTypeTrait, StateEvents: StateEventTrait> {
+    // Delegate to the full engine which we can use to wrap requests to the engine
+    engine_delegate: StateEngineDelegate<StateType, StateEvents>,
+}
+
+impl<StateType: StateTypeTrait, StateEvents: StateEventTrait> HSMInterface<StateType, StateEvents> {
+    pub(crate) fn new(engine_delegate: &StateEngineDelegate<StateType, StateEvents>) -> Self {
+        Self {
+            engine_delegate: engine_delegate.clone(),
+        }
+    }
+
+    pub async fn handle_event(
+        &mut self,
+        event: StateEvents,
+        // await_response: bool,
+        // ) -> HSMResult<Option<impl Future>, StateType> {
+    ) -> HSMResult<(), StateType> {
+        self.engine_delegate
+            .async_dispatch_event_internally(event)
+            .await
+    }
+
+    pub async fn get_current_state(&self) -> HSMResult<StateType, StateType> {
+        self.engine_delegate.get_current_state().await
+    }
+}
+
+impl<StateType: StateTypeTrait, StateEvents: StateEventTrait> Clone
+    for HSMInterface<StateType, StateEvents>
+{
+    fn clone(&self) -> Self {
+        Self {
+            engine_delegate: self.engine_delegate.clone(),
+        }
+    }
+}
+
 /// Struct encapsulating the process of building an HsmController.
 /// Enforces immutability of the controller as states are added.
 /// Effectively the public API to the controller for consumers.
@@ -489,11 +544,14 @@ pub struct HSMEngineBuilder<StateType: StateTypeTrait, StateEvents: StateEventTr
     logger: HSMLogger,
     engine_log_level: HSMLogger,
     delegates_provided: RefCell<Vec<StateId>>,
-    engine_delegate_rx: Receiver<StateEngineMessages<StateEvents>>,
-    state_delegate_tx: Sender<StateEngineMessages<StateEvents>>,
+    delegate_log_level: log::LevelFilter,
+    engine_delegate_rx: UnboundedReceiver<StateEngineMessages<StateType, StateEvents>>,
+    state_delegate_tx: UnboundedSender<StateEngineMessages<StateType, StateEvents>>,
+    loopback_delegate: StateEngineDelegate<StateType, StateEvents>,
 }
 
-impl<StateType: StateTypeTrait, StateEvents: StateEventTrait>
+// TODO - can we remove static??
+impl<StateType: StateTypeTrait + 'static, StateEvents: StateEventTrait + 'static>
     HSMEngineBuilder<StateType, StateEvents>
 {
     pub fn new(
@@ -501,8 +559,13 @@ impl<StateType: StateTypeTrait, StateEvents: StateEventTrait>
         top_state_id: u16,
         builder_logger_level: LevelFilter,
         engine_log_level: LevelFilter,
+        delegate_log_level: log::LevelFilter,
     ) -> HSMEngineBuilder<StateType, StateEvents> {
-        let (state_delegate_tx, engine_delegate_rx) = channel::<StateEngineMessages<StateEvents>>();
+        let (state_delegate_tx, engine_delegate_rx) =
+            unbounded_channel::<StateEngineMessages<StateType, StateEvents>>();
+        // 0 is reserved / invalid because it owned by the HSM
+        let loopback_delegate =
+            StateEngineDelegate::new(state_delegate_tx.clone(), StateId::new(0), engine_log_level);
         HSMEngineBuilder {
             // controller_under_construction: controller,
             unfinished_state_map: Default::default(),
@@ -513,8 +576,10 @@ impl<StateType: StateTypeTrait, StateEvents: StateEventTrait>
             logger: builder_logger_level.into(),
             engine_log_level: engine_log_level.into(),
             delegates_provided: Default::default(),
+            delegate_log_level,
             engine_delegate_rx,
             state_delegate_tx,
+            loopback_delegate,
         }
     }
 
@@ -542,6 +607,7 @@ impl<StateType: StateTypeTrait, StateEvents: StateEventTrait>
                 Ok(StateEngineDelegate::new(
                     self.state_delegate_tx.clone(),
                     state_id,
+                    self.delegate_log_level,
                 ))
             }
         }
@@ -599,7 +665,7 @@ impl<StateType: StateTypeTrait, StateEvents: StateEventTrait>
     pub fn init(
         self,
         initial_state_id: u16,
-    ) -> HSMResult<HSMEngine<StateType, StateEvents>, StateType> {
+    ) -> HSMResult<HSMInterface<StateType, StateEvents>, StateType> {
         let initial_state_id_struct = StateId::new(initial_state_id);
 
         let state_mapping = StateMapping::new(
@@ -613,74 +679,61 @@ impl<StateType: StateTypeTrait, StateEvents: StateEventTrait>
         }?;
         assert!(state_mapping.validate_cross_states());
 
-        let engine = HSMEngine::new(
+        let interface = HSMInterface::new(&self.loopback_delegate);
+        let mut engine = HSMEngine::new(
             self.hsm_name,
             self.engine_log_level,
             initial_state_id.into(),
             state_mapping,
             self.engine_delegate_rx,
-        );
+        )?;
 
-        engine
+        let handle = tokio::spawn(async move { engine.run_state_engine().await });
+
+        Ok(interface)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::test_utils::*;
     use crate::examples::*;
+    use crate::test_utils::*;
 
     #[test]
-    fn handle_state_change() {
+    fn test_handle_state_change() {
         let _ = build_test_hsm(ExampleStates::Top);
     }
 
     #[test]
-    fn handle_single_proxy_request() {
+    fn test_handle_single_proxy_request() {
         let _ = build_test_hsm(ExampleStates::Top);
     }
 
     #[test]
-    fn process_proxy_requests()
-    {
-
-    }
+    fn test_process_proxy_requests() {}
 
     #[test]
-    fn handle_event_internally() {
+    fn test_handle_event_internally() {
         // todo!()
     }
 
     #[test]
-    fn dispatch_event()
-    {
-
-    }
+    fn test_dispatch_event() {}
 
     #[test]
-    fn find_lca() {
+    fn test_find_lca() {
         // todo!()
     }
 
+    #[test]
+    fn test_enter_states_lca_to_target() {}
 
     #[test]
-    fn enter_states_lca_to_target()
-    {
-
-    }
-
-    #[test]
-    fn exit_states_until_target()
-    {
-
-    }
+    fn test_exit_states_until_target() {}
 
     /// In particular, test multi-thread scenarios where concurrently:
     ///     1) External threads send events to the HSM.
     ///     2) States of the HSM fire events into the HSM while handling current events.
     #[test]
-    fn test_many_queued_events()
-    {
-
-    }
+    fn test_many_queued_events() {}
 }

@@ -1,13 +1,14 @@
 ///! Contains structs and data useful across the module when running tests
 ///
 use crate::{
+    examples::*,
     state::{StateContainer, StateIF, StateId, StateTypeTrait},
+    state_engine::{HSMEngine, HSMEngineBuilder, HSMInterface},
     state_engine_channel_delegate::{StateEngineDelegate, StateEngineMessages},
-    state_engine::{HSMEngine, HSMEngineBuilder},
-    examples::*
 };
 
 use log;
+use tokio::sync::mpsc::UnboundedSender;
 
 use std::{ops::Add, sync::mpsc::Sender};
 
@@ -16,7 +17,9 @@ pub struct DummyStateStruct<ExampleStates: StateTypeTrait> {
     _data: StateEngineDelegate<ExampleStates, ExampleEvents>,
 }
 
-impl<ExampleStates: StateTypeTrait> StateIF<ExampleStates, ExampleEvents> for DummyStateStruct<ExampleStates> {
+impl<ExampleStates: StateTypeTrait> StateIF<ExampleStates, ExampleEvents>
+    for DummyStateStruct<ExampleStates>
+{
     fn handle_event(&mut self, event: &ExampleEvents) -> bool {
         // let extracted_args = event.extract_event_args();
         match event {
@@ -47,11 +50,12 @@ impl<ExampleStates: StateTypeTrait> StateIF<ExampleStates, ExampleEvents> for Du
 impl DummyStateStruct<ExampleStates> {
     fn new(
         num_states_created_counter: &mut u16,
-        delegate_tx: Sender<StateEngineMessages<ExampleEvents>>,
+        delegate_tx: UnboundedSender<StateEngineMessages<ExampleStates, ExampleEvents>>,
     ) -> Self {
         let data = StateEngineDelegate::<ExampleStates, ExampleEvents>::new(
             delegate_tx,
             StateId::new(num_states_created_counter.clone()),
+            log::LevelFilter::Debug,
         );
         *num_states_created_counter = num_states_created_counter.add(1);
 
@@ -65,7 +69,7 @@ impl DummyStateStruct<ExampleStates> {
 pub(crate) fn fill_state_container(
     state_metadata: ExampleStates,
     num_states_created_counter: &mut u16,
-    delegate_tx: Sender<StateEngineMessages<ExampleEvents>>,
+    delegate_tx: UnboundedSender<StateEngineMessages<ExampleStates, ExampleEvents>>,
 ) -> StateContainer<ExampleStates, ExampleEvents> {
     let state_struct = DummyStateStruct::new(num_states_created_counter, delegate_tx);
 
@@ -85,11 +89,14 @@ pub(crate) fn cast_id_vector(state_list: &Vec<StateId>) -> Vec<ExampleStates> {
 }
 
 /// Builds an hsm and implicitly tests the builder!
-pub(crate) fn build_test_hsm(initial_state: ExampleStates) -> HSMEngine<ExampleStates, ExampleEvents> {
+pub(crate) fn build_test_hsm(
+    initial_state: ExampleStates,
+) -> HSMInterface<ExampleStates, ExampleEvents> {
     let engine_builder: HSMEngineBuilder<ExampleStates, ExampleEvents> = HSMEngineBuilder::new(
         "TestHsm".to_string(),
         ExampleStates::Top as u16,
         log::LevelFilter::Info,
+        log::LevelFilter::Debug,
         log::LevelFilter::Debug,
     );
 
@@ -111,10 +118,18 @@ pub(crate) fn build_test_hsm(initial_state: ExampleStates) -> HSMEngine<ExampleS
     let state_b1_impl = B1Impl::new(b1_delegate);
     let state_a2_impl = A2Impl::new(a2_delegate);
 
-    let hsm = engine_builder
+    let hsm_interface = engine_builder
         .add_state(state_top, ExampleStates::Top, None)
-        .add_state(state_a1_impl, ExampleStates::LevelA1, Some(ExampleStates::Top))
-        .add_state(state_b1_impl, ExampleStates::LevelB1, Some(ExampleStates::Top))
+        .add_state(
+            state_a1_impl,
+            ExampleStates::LevelA1,
+            Some(ExampleStates::Top),
+        )
+        .add_state(
+            state_b1_impl,
+            ExampleStates::LevelB1,
+            Some(ExampleStates::Top),
+        )
         .add_state(
             state_a2_impl,
             ExampleStates::LevelA2,
@@ -123,5 +138,5 @@ pub(crate) fn build_test_hsm(initial_state: ExampleStates) -> HSMEngine<ExampleS
         .init(initial_state as u16)
         .unwrap();
 
-    hsm
+    hsm_interface
 }

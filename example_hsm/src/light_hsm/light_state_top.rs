@@ -25,14 +25,14 @@ impl StateIF<LightStates, LightEvents> for LightStateTop {
         }
     }
     fn handle_state_start(&mut self) {
-        self.shared_data.borrow_mut().top_start_called += 1;
+        self.shared_data.write().unwrap().top_start_called += 1;
     }
 
     fn handle_state_enter(&mut self) {
-        self.shared_data.borrow_mut().top_enter_called += 1;
+        self.shared_data.write().unwrap().top_enter_called += 1;
     }
 
     fn handle_state_exit(&mut self) {
-        self.shared_data.borrow_mut().top_exit_called += 1;
+        self.shared_data.write().unwrap().top_exit_called += 1;
     }
 }

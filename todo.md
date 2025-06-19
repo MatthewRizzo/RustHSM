@@ -26,3 +26,7 @@ Main Aims:
       2. In otherwords, they would need to orchestrate a re-direction of async events externally
       3. If they do not do this, it will not be handled until the NEXT time an external consumer fires
       4. Moreover, it will be handled out of order
+
+
+* dispatch_event
+* 

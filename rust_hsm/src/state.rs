@@ -1,12 +1,12 @@
 ///! This file contains the logic for an individual state and how they link together
-use std::{boxed::Box, cell::RefCell, fmt::Display};
+use std::{boxed::Box, cell::RefCell, fmt::Display, marker, sync::Mutex};
 
 use crate::events::StateEventTrait;
 
 /// All valid definitions of a 'class' of state's must be StateTypes.
 /// By enforcing these characteristics, the Engine can translate from its
 /// limited knowledge set to the true state typing provided by the consumer.
-pub trait StateTypeTrait: Display + Into<u16> + From<u16> + Clone {}
+pub trait StateTypeTrait: Display + Into<u16> + From<u16> + Clone + std::marker::Send {}
 
 /// An inexpensive token representing a state that can be exchanged for more
 /// complex data structures.
@@ -40,7 +40,8 @@ impl From<u16> for StateId {
 }
 
 /// The State reference accepted as inputs for the controller to manage
-pub type StateBox<StateType, StateEvents> = Box<dyn StateIF<StateType, StateEvents>>;
+pub type StateBox<StateType, StateEvents> =
+    Box<dyn StateIF<StateType, StateEvents> + std::marker::Send>;
 
 pub trait StateIF<StateType: StateTypeTrait, StateEvents: StateEventTrait> {
     /// Called whenever state is entered (even if transiently).
@@ -64,7 +65,7 @@ pub trait StateIF<StateType: StateTypeTrait, StateEvents: StateEventTrait> {
 
 /// All elements are cheap data structure or those with copy/clone/rc semantics
 pub(crate) struct StateContainer<StateType: StateTypeTrait, StateEvents: StateEventTrait> {
-    pub state_ref: RefCell<StateBox<StateType, StateEvents>>,
+    pub state_ref: Mutex<StateBox<StateType, StateEvents>>,
     pub state_id: StateId,
 }
 
@@ -73,7 +74,7 @@ impl<StateType: StateTypeTrait, StateEvents: StateEventTrait>
 {
     pub(crate) fn new(state_id: StateId, state_ref: StateBox<StateType, StateEvents>) -> Self {
         Self {
-            state_ref: RefCell::new(state_ref),
+            state_ref: Mutex::new(state_ref),
             state_id,
         }
     }

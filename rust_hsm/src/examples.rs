@@ -10,11 +10,12 @@ use crate::{
 #[repr(u16)]
 #[derive(strum::FromRepr, Clone, PartialEq, Debug, strum::Display)]
 pub enum ExampleStates {
-    INVALID = u16::MAX,
+    Interface = 0,
     Top = 1,
     LevelA1 = 2,
     LevelB1 = 3,
     LevelA2 = 4,
+    INVALID = u16::MAX,
 }
 
 impl Into<u16> for ExampleStates {

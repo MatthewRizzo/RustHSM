@@ -1,6 +1,6 @@
 use rust_hsm::{
     errors::HSMResult,
-    state_engine::{HSMEngine, HSMEngineBuilder},
+    state_engine::{HSMEngineBuilder, HSMInterface},
 };
 
 use crate::light_hsm::{
@@ -12,11 +12,10 @@ use crate::light_hsm::{
     light_state_top::LightStateTop,
     light_states::LightStates,
 };
-
 use log;
 
 pub struct LightControllerHsm {
-    hsm: HSMEngine<LightStates, LightEvents>,
+    hsm: HSMInterface<LightStates, LightEvents>,
     /// Again...leaking this is a bad idea. It is only done here for testing/asserting
     /// Do NOT do this in a real HSM
     pub(crate) _shared_data: LightHsmDataRef,
@@ -31,6 +30,7 @@ impl LightControllerHsm {
             LightStates::Top as u16,
             log::LevelFilter::Info,
             engine_log_level,
+            log::LevelFilter::Info,
         );
 
         #[allow(unused)] // Not every state needs a delegate! But you can acquire it!
@@ -79,16 +79,22 @@ impl LightControllerHsm {
     }
 
     /// Note: exposing the current state is ALSO a really bad idea.
-    pub(crate) fn get_current_state(&self) -> LightStates {
+    pub(crate) async fn get_current_state(&self) -> LightStates {
         // In a real system you would want to translate from HSMResult -> your result
         self.hsm
             .get_current_state()
+            .await
             .expect("Called before the HSM was initialized!")
     }
 
-    pub(crate) fn dispatch_into_hsm(&mut self, event: LightEvents) -> HSMResult<(), LightStates> {
+    pub(crate) async fn dispatch_into_hsm(
+        &mut self,
+        event: LightEvents,
+    ) -> HSMResult<(), LightStates> {
         // In a real system you would want to translate from HSMResult -> your result
-        self.hsm.dispatch_event(event)
+        // self.hsm.handle_event(event, true)?.unwrap().await;
+        self.hsm.handle_event(event).await.unwrap();
+        Ok(())
     }
 
     /// In a real HSM this is a BAD idea. DO NOT LEAK the data

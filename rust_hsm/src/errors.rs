@@ -1,4 +1,5 @@
 use crate::state::StateTypeTrait;
+use strum::Display;
 use thiserror::Error;
 
 // pub type HSMResult<T> = std::result::Result<T, HSMError>;
@@ -32,6 +33,12 @@ pub enum HSMError<StateType: StateTypeTrait> {
     NotAState(u16),
     #[error("State {0} has already been provided a delegate! The same state cannot be allocated >1 delegate!")]
     AlreadyDelegated(StateType),
-    #[error("Requesting change state to {0}, but there was already a change state request to {1} while handling {2}" )]
-    MultipleConcurrentChangeState(StateType, StateType, String),
+    // #[error("Requesting change state to {0}, but there was already a change state request to {1} while handling {2}" )]
+    // MultipleConcurrentChangeState(StateType, StateType, String),
+    #[error("The HSMEngine can only be run once but run_state_engine was called again!")]
+    RunnableOnce(),
+    #[error("Oneshot channel receive failed: {0} during {1}")]
+    OneshotResponseNeverReceivedError(tokio::sync::oneshot::error::RecvError, String),
+    #[error("Oneshot channel send failed: during {0}")]
+    CallbackResponseNeverSentError(String),
 }

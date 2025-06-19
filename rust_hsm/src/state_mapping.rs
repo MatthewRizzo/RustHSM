@@ -144,7 +144,7 @@ impl<StateType: StateTypeTrait, StateEvents: StateEventTrait> StateMapping<State
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc::channel;
+    use tokio::sync::mpsc::unbounded_channel;
 
     use crate::examples::*;
     use crate::test_utils::*;
@@ -152,7 +152,6 @@ mod tests {
 
     use super::*;
 
-    // fn do_paths_match(a: &Vec<StateContainer<ExampleStates>>, b: &Vec<StateContainer<ExampleStates>>) -> bool {
     fn do_paths_match(a: &Vec<StateId>, b: &Vec<StateId>) -> bool {
         let matching = a.iter().zip(b.iter()).filter(|&(a, b)| a == b).count();
         matching == a.len() && matching == b.len()
@@ -172,7 +171,7 @@ mod tests {
         let mut state_map = HashMap::<StateId, StateContainer<ExampleStates, ExampleEvents>>::new();
         let mut raw_parent_map = HashMap::<StateId, StateId>::new();
         let mut num_states_created: u16 = 0;
-        let (tx, _) = channel();
+        let (tx, _) = unbounded_channel();
 
         let top_container =
             fill_state_container(ExampleStates::Top, &mut num_states_created, tx.clone());
@@ -225,7 +224,7 @@ mod tests {
         assert!(mapping.is_state_id_valid(&ExampleStates::LevelA1.into()));
         assert!(mapping.is_state_id_valid(&ExampleStates::LevelB1.into()));
         assert!(mapping.is_state_id_valid(&ExampleStates::LevelA2.into()));
-        assert!(!mapping.is_state_id_valid(&ExampleStates::INVALID.into()));
+        assert!(!mapping.is_state_id_valid(&ExampleStates::EXTERNAL.into()));
 
         assert!(mapping.validate_cross_states());
         test_logger.log_info(

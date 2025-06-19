@@ -1,6 +1,10 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::RefCell,
+    rc::Rc,
+    sync::{Arc, RwLock},
+};
 
-pub type LightHsmDataRef = Rc<RefCell<LightHsmData>>;
+pub type LightHsmDataRef = Arc<RwLock<LightHsmData>>;
 
 pub enum LightAdjustment {
     Increase,
@@ -29,8 +33,8 @@ pub struct LightHsmData {
 
 impl LightHsmData {
     /// 0 = off, 100 = on
-    pub(crate) fn new(percentage: u8) -> Rc<RefCell<Self>> {
-        Rc::new(RefCell::new(Self {
+    pub(crate) fn new(percentage: u8) -> Arc<RwLock<Self>> {
+        Arc::new(RwLock::new(Self {
             light_percentage: percentage,
             top_enter_called: Default::default(),
             top_start_called: Default::default(),

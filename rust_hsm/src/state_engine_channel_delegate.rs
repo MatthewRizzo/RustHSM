@@ -3,17 +3,22 @@
 use crate::{
     errors::{HSMError, HSMResult},
     events::StateEventTrait,
+    logger::HSMLogger,
     state::{StateId, StateTypeTrait},
+    utils::get_function_name,
 };
 
-use std::{marker::PhantomData, sync::mpsc::Sender};
+use std::{future::Future, marker::PhantomData};
+use tokio::sync::{mpsc::UnboundedSender, oneshot};
 
 type RequestingStateId = StateId;
 type TargetedStateId = StateId;
+type MessageProcessedCb<T> = oneshot::Sender<T>;
 
-pub(crate) enum StateEngineMessages<StateEvents> {
+pub(crate) enum StateEngineMessages<StateType: StateTypeTrait, StateEvents> {
     ChangeState(RequestingStateId, TargetedStateId),
-    FireEvent(RequestingStateId, StateEvents),
+    FireEvent(RequestingStateId, StateEvents, MessageProcessedCb<()>),
+    GetCurrentState(MessageProcessedCb<StateType>),
 }
 
 /// # What is this?
@@ -24,6 +29,7 @@ pub(crate) enum StateEngineMessages<StateEvents> {
 ///     * This is enforced by the engine builder.
 /// * There is a 1-* relationship between the engine and delegates via channel.
 /// * The engine is not aware that delegates exist.
+/// * EXPLICITLY not copy-able! Each state owns their own delegate for tracking!
 ///
 /// # Why Is this Necessary?
 /// * Concrete State implementation must have affordances to talk to the engine
@@ -71,7 +77,7 @@ pub(crate) enum StateEngineMessages<StateEvents> {
 /// let builder: HSMEngineBuilder<ExampleStates, ExampleEvents> = HSMEngineBuilder::new(
 ///     "FooHsm".to_string(),
 ///     ExampleStates::Top as u16,
-///     LevelFilter::Info, LevelFilter::Info
+///     LevelFilter::Info, LevelFilter::Info, LevelFilter::Info
 /// );
 ///
 /// let top_delegate = builder.create_delegate(ExampleStates::Top as u16).expect("");
@@ -93,10 +99,11 @@ pub(crate) enum StateEngineMessages<StateEvents> {
 ///     .expect("Failed to init hsm");
 /// ```
 pub struct StateEngineDelegate<StateType: StateTypeTrait, StateEvents: StateEventTrait> {
-    pub(crate) sender_to_engine: Sender<StateEngineMessages<StateEvents>>,
+    pub(crate) sender_to_engine: UnboundedSender<StateEngineMessages<StateType, StateEvents>>,
     /// Think of this like a user-agent and or a token to provide the engine for
     /// each request!
     delegated_state_id: StateId,
+    logger: HSMLogger,
     state_enum_phantom: PhantomData<StateType>,
 }
 
@@ -106,15 +113,28 @@ impl<StateType: StateTypeTrait, StateEvents: StateEventTrait>
     StateEngineDelegate<StateType, StateEvents>
 {
     pub(crate) fn new(
-        sender_to_engine: Sender<StateEngineMessages<StateEvents>>,
+        sender_to_engine: UnboundedSender<StateEngineMessages<StateType, StateEvents>>,
         delegated_state_id: StateId,
+        log_level: log::LevelFilter,
     ) -> Self {
         Self {
             sender_to_engine,
             delegated_state_id,
+            logger: HSMLogger::new(log_level),
             state_enum_phantom: PhantomData,
         }
     }
+
+    // While is true we do not want users copying their delegates, we DO for the main delegate to the engine itself
+    pub(crate) fn clone(&self) -> Self {
+        Self {
+            sender_to_engine: self.sender_to_engine.clone(),
+            delegated_state_id: self.delegated_state_id.clone(),
+            logger: self.logger.clone(),
+            state_enum_phantom: self.state_enum_phantom.clone(),
+        }
+    }
+
     /// # Why
     /// The request cannot be submit directly to the controller.
     /// Complicated reason that simplifies to: triggering an event in the controller causes
@@ -136,22 +156,85 @@ impl<StateType: StateTypeTrait, StateEvents: StateEventTrait>
             .map_err(|_| HSMError::DelegateNotConnected())
     }
 
-    pub fn dispatch_event_internally(&mut self, event: StateEvents) -> HSMResult<(), StateType> {
-        let evt = StateEngineMessages::FireEvent(self.delegated_state_id.clone(), event);
+    // pub fn dispatch_event_internally(
+    //     &mut self,
+    //     event: StateEvents,
+    //     await_response: bool,
+    // ) -> HSMResult<Option<impl Future<Output = HSMResult<(), StateType>>>, StateType> {
+    //     let (resp_tx, resp_rx) = oneshot::channel();
+
+    //     let evt = StateEngineMessages::FireEvent(
+    //         self.delegated_state_id.clone(),
+    //         event,
+    //         resp_tx
+    //     );
+
+    //     self.sender_to_engine
+    //         .send(evt)
+    //         .map_err(|_| HSMError::DelegateNotConnected())?;
+    //     if await_response {
+    //         Ok(Some(async move {
+    //             resp_rx.await.map_err(|err| {
+    //                 HSMError::OneshotResponseNeverReceivedError(
+    //                     err,
+    //                     "Waiting for dispatch to finish".to_string(),
+    //                 )
+    //             })
+    //         }))
+    //     } else {
+    //         Ok(None)
+    //     }
+    // }
+
+    pub async fn async_dispatch_event_internally(
+        &mut self,
+        event: StateEvents,
+    ) -> HSMResult<(), StateType> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+
+        let evt = StateEngineMessages::FireEvent(self.delegated_state_id.clone(), event, resp_tx);
+
         self.sender_to_engine
             .send(evt)
-            .map_err(|_| HSMError::DelegateNotConnected())
+            .map_err(|_| HSMError::DelegateNotConnected())?;
+
+        resp_rx.await.map_err(|err| {
+            HSMError::OneshotResponseNeverReceivedError(
+                err,
+                "Waiting for dispatch to finish".to_string(),
+            )
+        })
+    }
+
+    pub(crate) async fn get_current_state(&self) -> HSMResult<StateType, StateType> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        let evt = StateEngineMessages::GetCurrentState(resp_tx);
+
+        self.logger
+            .log_debug(get_function_name!(), "Before GetCurrentState successful");
+        self.sender_to_engine
+            .send(evt)
+            .map_err(|_| HSMError::DelegateNotConnected())?;
+        self.logger
+            .log_debug(get_function_name!(), "Send GetCurrentState successful");
+
+        resp_rx.await.map_err(|err| {
+            HSMError::OneshotResponseNeverReceivedError(err, "get_current_state".to_string())
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{
-        sync::mpsc::{channel, Receiver},
-        time::Duration,
-    };
-    use crate::examples::*;
+    use crate::{examples::*, logger::HSMLogger};
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::sync::{mpsc::*, Notify};
+
+    fn create_logger() -> HSMLogger {
+        HSMLogger::new(log::LevelFilter::Debug)
+    }
 
     #[derive(Debug, strum::Display, PartialEq, Clone)]
     pub enum DelegateTestEvent {
@@ -161,139 +244,208 @@ mod tests {
 
     impl StateEventTrait for DelegateTestEvent {}
 
-    struct MockedDelegate
-    {
+    struct MockedDelegate {
         delegate: StateEngineDelegate<ExampleStates, DelegateTestEvent>,
-        mock_rx_channel: Receiver<StateEngineMessages<DelegateTestEvent>>
+        mock_rx_channel: UnboundedReceiver<StateEngineMessages<ExampleStates, DelegateTestEvent>>,
     }
 
+    async fn get_next_event(
+        rx: &mut UnboundedReceiver<StateEngineMessages<ExampleStates, DelegateTestEvent>>,
+    ) -> Option<StateEngineMessages<ExampleStates, DelegateTestEvent>> {
+        match rx.recv().await.ok_or_else(|| 0) {
+            Err(_) => None, // all proxy requests have been processed! We are done!
+            Ok(req) => Some(req),
+        }
+    }
     impl MockedDelegate {
-        fn get_next_event(&mut self) -> Option<StateEngineMessages<DelegateTestEvent>>{
-            match self.mock_rx_channel.recv_timeout(Duration::new(0, 0)) {
-                Err(_) => None, // all proxy requests have been processed! We are done!
-                Ok(req) => Some(req),
-            }
+        async fn get_next_event(
+            &mut self,
+        ) -> Option<StateEngineMessages<ExampleStates, DelegateTestEvent>> {
+            get_next_event(&mut self.mock_rx_channel).await
         }
     }
 
-    fn create_mock_delegate(
-        state_id: u16
-    ) -> MockedDelegate
-    {
-        let (tx, rx) = channel::<StateEngineMessages<DelegateTestEvent>>();
-        let delegate = StateEngineDelegate::new(
-            tx,
-            StateId::new(state_id)
-        );
+    fn create_mock_delegate(state_id: u16) -> MockedDelegate {
+        let (tx, rx) = unbounded_channel::<StateEngineMessages<ExampleStates, DelegateTestEvent>>();
+        let delegate =
+            StateEngineDelegate::new(tx, StateId::new(state_id), log::LevelFilter::Debug);
 
-        MockedDelegate{
+        MockedDelegate {
             delegate,
-            mock_rx_channel: rx
+            mock_rx_channel: rx,
         }
     }
 
     fn is_evt_change_state(
-        evt: Option<StateEngineMessages<DelegateTestEvent>>,
+        evt: Option<StateEngineMessages<ExampleStates, DelegateTestEvent>>,
         expected_requester: u16,
-        expected_target: u16
-    ) -> bool
-    {
-        if evt.is_none() {
-            return  false;
-        }
-
-        match evt.unwrap() {
-            StateEngineMessages::ChangeState(requester, target) => {
-                *requester.get_id() == expected_requester
-                && *target.get_id() == expected_target
-            }
-            StateEngineMessages::FireEvent(_, _) => false
-        }
-    }
-
-    fn is_evt_dispatch_event(
-        evt: Option<StateEngineMessages<DelegateTestEvent>>,
-        expected_requester: u16,
-        expected_sent_event: DelegateTestEvent
-    ) -> bool
-    {
+        expected_target: u16,
+    ) -> bool {
         if evt.is_none() {
             return false;
         }
 
         match evt.unwrap() {
-            StateEngineMessages::FireEvent(requester, sent_event) => {
-                *requester.get_id() == expected_requester
-                && sent_event == expected_sent_event
+            StateEngineMessages::ChangeState(requester, target) => {
+                *requester.get_id() == expected_requester && *target.get_id() == expected_target
             }
-            StateEngineMessages::ChangeState(_, _) => false
+            _ => false,
         }
     }
 
-    #[test]
-    fn change_state()
-    {
+    fn is_evt_dispatch_event(
+        evt: Option<StateEngineMessages<ExampleStates, DelegateTestEvent>>,
+        expected_requester: u16,
+        expected_sent_event: DelegateTestEvent,
+    ) -> bool {
+        if evt.is_none() {
+            return false;
+        }
+
+        match evt.unwrap() {
+            StateEngineMessages::FireEvent(requester, sent_event, on_complete_cb) => {
+                *requester.get_id() == expected_requester && sent_event == expected_sent_event
+            }
+            _ => false,
+        }
+    }
+
+    async fn consumer_rx_request_with_notify(
+        mut rx: UnboundedReceiver<StateEngineMessages<ExampleStates, DelegateTestEvent>>,
+        notify: Arc<Notify>,
+    ) -> Option<StateEngineMessages<ExampleStates, DelegateTestEvent>> {
+        while let Some(req) = rx.recv().await {
+            println!("Consumer received");
+            notify.notify_one(); // signal to test that data was received
+            return Some(req);
+        }
+        None
+    }
+
+    #[tokio::test]
+    async fn test_change_state() {
+        let logger = create_logger();
         let state_id = 0;
         let new_state_id_1 = 1;
         let new_state_id_2 = 2;
         let new_state_id_3 = 3;
         let new_state_id_4 = 4;
         let mut mock = create_mock_delegate(state_id);
-        mock.delegate.change_state(new_state_id_1).expect("Sending change state should work!");
+        mock.delegate
+            .change_state(new_state_id_1)
+            .expect("Sending change state should work!");
+        logger.log_info(get_function_name!(), "After Change State");
 
-        let received_evt = mock.get_next_event();
+        let received_evt = mock.get_next_event().await;
+        logger.log_info(get_function_name!(), "After get next event 1");
         assert!(is_evt_change_state(received_evt, state_id, new_state_id_1));
-        assert!(mock.get_next_event().is_none());
 
         println!("Sending many change state's");
-        mock.delegate.change_state(new_state_id_2).expect("Sending change state should work!");
-        mock.delegate.change_state(new_state_id_3).expect("Sending change state should work!");
-        mock.delegate.change_state(new_state_id_4).expect("Sending change state should work!");
-        mock.delegate.change_state(new_state_id_1).expect("Sending change state should work!");
+        mock.delegate
+            .change_state(new_state_id_2)
+            .expect("Sending change state should work!");
+        mock.delegate
+            .change_state(new_state_id_3)
+            .expect("Sending change state should work!");
+        mock.delegate
+            .change_state(new_state_id_4)
+            .expect("Sending change state should work!");
+        mock.delegate
+            .change_state(new_state_id_1)
+            .expect("Sending change state should work!");
 
-        assert!(is_evt_change_state(mock.get_next_event(), state_id, new_state_id_2));
-        assert!(is_evt_change_state(mock.get_next_event(), state_id, new_state_id_3));
-        assert!(is_evt_change_state(mock.get_next_event(), state_id, new_state_id_4));
-        assert!(is_evt_change_state(mock.get_next_event(), state_id, new_state_id_1));
-
+        assert!(is_evt_change_state(
+            mock.get_next_event().await,
+            state_id,
+            new_state_id_2
+        ));
+        assert!(is_evt_change_state(
+            mock.get_next_event().await,
+            state_id,
+            new_state_id_3
+        ));
+        assert!(is_evt_change_state(
+            mock.get_next_event().await,
+            state_id,
+            new_state_id_4
+        ));
+        assert!(is_evt_change_state(
+            mock.get_next_event().await,
+            state_id,
+            new_state_id_1
+        ));
     }
 
-    #[test]
-    fn dispatch_event_internally()
-    {
+    #[tokio::test]
+    async fn test_dispatch_event_internally() {
         let state_id = 0;
         let mut mock = create_mock_delegate(state_id);
 
         let evt_a = DelegateTestEvent::TestA;
         let evt_b = DelegateTestEvent::TestB("FakeString".to_string());
-        mock.delegate.dispatch_event_internally(evt_a.clone()).expect("Sending event should work!");
-        mock.delegate.dispatch_event_internally(evt_b.clone()).expect("Sending event should work!");
+        mock.delegate
+            .async_dispatch_event_internally(evt_a.clone())
+            .await
+            .expect("Sending event should work!");
+        mock.delegate
+            .async_dispatch_event_internally(evt_b.clone())
+            .await
+            .expect("Sending event should work!");
 
-        assert!(is_evt_dispatch_event(mock.get_next_event(), state_id, evt_a.clone()));
-        assert!(is_evt_dispatch_event(mock.get_next_event(), state_id, evt_b.clone()));
-
+        assert!(is_evt_dispatch_event(
+            mock.get_next_event().await,
+            state_id,
+            evt_a.clone()
+        ));
+        assert!(is_evt_dispatch_event(
+            mock.get_next_event().await,
+            state_id,
+            evt_b.clone()
+        ));
         // Channel is empty
-        assert!(is_evt_dispatch_event(mock.get_next_event(), state_id, evt_b.clone()) == false);
 
         // Put many more in the channel
-        mock.delegate.dispatch_event_internally(evt_a.clone()).expect("Sending event should work!");
-        mock.delegate.dispatch_event_internally(evt_a.clone()).expect("Sending event should work!");
-        mock.delegate.dispatch_event_internally(evt_a.clone()).expect("Sending event should work!");
-        mock.delegate.dispatch_event_internally(evt_a.clone()).expect("Sending event should work!");
-        mock.delegate.dispatch_event_internally(evt_a.clone()).expect("Sending event should work!");
+        mock.delegate
+            .async_dispatch_event_internally(evt_a.clone())
+            .await
+            .expect("Sending event should work!");
+        mock.delegate
+            .async_dispatch_event_internally(evt_a.clone())
+            .await
+            .expect("Sending event should work!");
+        mock.delegate
+            .async_dispatch_event_internally(evt_a.clone())
+            .await
+            .expect("Sending event should work!");
+        mock.delegate
+            .async_dispatch_event_internally(evt_a.clone())
+            .await
+            .expect("Sending event should work!");
+        mock.delegate
+            .async_dispatch_event_internally(evt_a.clone())
+            .await
+            .expect("Sending event should work!");
 
         // Check that only the events we expect are there
-        assert!(is_evt_dispatch_event(mock.get_next_event(), state_id, evt_b.clone()) == false);
-        assert!(is_evt_dispatch_event(mock.get_next_event(), state_id, evt_b.clone()) == false);
-        assert!(is_evt_dispatch_event(mock.get_next_event(), state_id, evt_b.clone()) == false);
-        assert!(is_evt_dispatch_event(mock.get_next_event(), state_id, evt_b.clone()) == false);
-        assert!(is_evt_dispatch_event(mock.get_next_event(), state_id, evt_b.clone()) == false);
-
+        assert!(
+            is_evt_dispatch_event(mock.get_next_event().await, state_id, evt_b.clone()) == false
+        );
+        assert!(
+            is_evt_dispatch_event(mock.get_next_event().await, state_id, evt_b.clone()) == false
+        );
+        assert!(
+            is_evt_dispatch_event(mock.get_next_event().await, state_id, evt_b.clone()) == false
+        );
+        assert!(
+            is_evt_dispatch_event(mock.get_next_event().await, state_id, evt_b.clone()) == false
+        );
+        assert!(
+            is_evt_dispatch_event(mock.get_next_event().await, state_id, evt_b.clone()) == false
+        );
     }
 
-    #[test]
-    fn disconnect_channel()
-    {
+    #[tokio::test]
+    async fn disconnect_channel() {
         let state_id = 0;
         let mut mock = create_mock_delegate(state_id);
 
@@ -302,14 +454,43 @@ mod tests {
 
         match mock.delegate.change_state(2) {
             Ok(_) => assert!(false),
-            Err(err) => assert!(matches!(err, HSMError::DelegateNotConnected()))
+            Err(err) => assert!(matches!(err, HSMError::DelegateNotConnected())),
         }
 
         let evt = DelegateTestEvent::TestA;
-        match mock.delegate.dispatch_event_internally(evt) {
+        match mock.delegate.async_dispatch_event_internally(evt).await {
             Ok(_) => assert!(false),
-            Err(err) => assert!(matches!(err, HSMError::DelegateNotConnected()))
+            Err(err) => assert!(matches!(err, HSMError::DelegateNotConnected())),
         }
     }
 
+    #[tokio::test]
+    async fn test_get_current_state() {
+        let notify = Arc::new(Notify::new());
+        // We cannot create a mocked delegate here because we need to own the rx
+        let (tx, mut request_rx) =
+            unbounded_channel::<StateEngineMessages<ExampleStates, DelegateTestEvent>>();
+        let delegate = StateEngineDelegate::new(tx, StateId::new(0), log::LevelFilter::Debug);
+
+        tokio::spawn(async move {
+            let req = consumer_rx_request_with_notify(request_rx, notify)
+                .await
+                .expect("");
+            match req {
+                StateEngineMessages::GetCurrentState(response_sender) => response_sender
+                    .send(ExampleStates::LevelA2)
+                    .expect("Sending response should not fail!"),
+                _ => assert!(false),
+            }
+        });
+
+        println!("Calling get_current_state!");
+        let response_future = delegate.get_current_state();
+
+        println!("Waiting response to be received!");
+        let response_received = response_future
+            .await
+            .expect("We should receive a response!");
+        assert!(response_received == ExampleStates::LevelA2)
+    }
 }

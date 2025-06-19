@@ -15,11 +15,10 @@ thiserror = "1.0.51"
 rust_hsm = { path = "rust_hsm" }
 strum = { version = "0.26.3", features = ["derive"]}
 log = "0.4.22"
+futures = "0.3.31"
+tokio = { version = "1.45.1", features = ["sync", "macros", "rt", "rt-multi-thread"] }
 
 [[bin]]
 path = "example_hsm/src/main.rs"
 name = "example_hsm"
 
-# [lib]
-# path = "rust_hsm/src/lib.rs"
-# name = "rust_hsm"

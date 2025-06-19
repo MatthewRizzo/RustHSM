@@ -48,15 +48,15 @@ impl StateIF<LightStates, LightEvents> for LightStateOn {
     /// We could get 0 -> 100 -> 50. That is a bad UX!
     /// Only set it to 100 if we are staying here
     fn handle_state_start(&mut self) {
-        self.shared_data.borrow_mut().on_start_called += 1;
-        self.shared_data.borrow_mut().turn_on();
+        self.shared_data.write().unwrap().on_start_called += 1;
+        self.shared_data.write().unwrap().turn_on();
     }
 
     fn handle_state_enter(&mut self) {
-        self.shared_data.borrow_mut().on_enter_called += 1;
+        self.shared_data.write().unwrap().on_enter_called += 1;
     }
 
     fn handle_state_exit(&mut self) {
-        self.shared_data.borrow_mut().on_exit_called += 1;
+        self.shared_data.write().unwrap().on_exit_called += 1;
     }
 }
