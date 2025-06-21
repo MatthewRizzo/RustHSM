@@ -1,7 +1,7 @@
 // https://crates.io/crates/strum_macros
 use strum::{self, Display};
 
-use rust_hsm::state::StateTypeTrait;
+use rust_hsm::state::StateConstraint;
 
 #[repr(u16)]
 #[derive(strum::AsRefStr, strum::FromRepr, Display, Clone, PartialEq, Debug)]
@@ -29,4 +29,4 @@ impl From<u16> for LightStates {
     }
 }
 
-impl StateTypeTrait for LightStates {}
+impl StateConstraint for LightStates {}

@@ -1,9 +1,13 @@
 ///! Contains structs and infrastructure useful for minimal examples in docs (and tests)
 use crate::{
-    events::StateEventTrait,
-    state::{StateIF, StateId, StateTypeTrait},
-    state_engine_channel_delegate::StateEngineDelegate,
+    errors::{HSMError, HSMResult},
+    events::StateEventConstraint,
+    state::{StateConstraint, StateIF, StateId},
+    state_engine_delegate::EngineDelegate,
+    utils::resolve_state_name,
 };
+
+use std::cell::RefCell;
 
 // Start of States Enum //
 
@@ -38,7 +42,7 @@ impl From<u16> for ExampleStates {
     }
 }
 
-impl StateTypeTrait for ExampleStates {}
+impl StateConstraint for ExampleStates {}
 
 // End of States Enum //
 
@@ -53,12 +57,12 @@ pub struct ExampleStateData {
     pub count_d_handled_true: u16,
     pub count_e_handled_true: u16,
     pub count_f_handled_true: u16,
-    pub delegate: StateEngineDelegate<ExampleStates, ExampleEvents>,
+    pub delegate: EngineDelegate<ExampleStates, ExampleEvents>,
 }
 
 impl ExampleStateData {
-    pub fn new(delegate: StateEngineDelegate<ExampleStates, ExampleEvents>) -> Self {
-        Self {
+    pub fn new(delegate: EngineDelegate<ExampleStates, ExampleEvents>) -> RefCell<Self> {
+        RefCell::new(Self {
             state_entered: false,
             state_exited: false,
             count_a_handled_true: Default::default(),
@@ -68,7 +72,7 @@ impl ExampleStateData {
             count_e_handled_true: Default::default(),
             count_f_handled_true: Default::default(),
             delegate,
-        }
+        })
     }
 }
 
@@ -76,20 +80,25 @@ impl ExampleStateData {
 
 // Start of State definitions //
 
+// Wrap the data in RefCell to reflect the fact that
+// 1) Our states might want to mutate their data during handle_event
+// 2) Handle_event is const
+// 3) The hsm own const references to the states with the expectation that consumers will not directly interact with the states.
+
 pub struct Top {
-    pub data: ExampleStateData,
+    pub data: RefCell<ExampleStateData>,
 }
 
 pub struct A1Impl {
-    pub data: ExampleStateData,
+    pub data: RefCell<ExampleStateData>,
 }
 
 pub struct B1Impl {
-    pub data: ExampleStateData,
+    pub data: RefCell<ExampleStateData>,
 }
 
 pub struct A2Impl {
-    pub data: ExampleStateData,
+    pub data: RefCell<ExampleStateData>,
 }
 
 // End of State definitions //
@@ -113,35 +122,35 @@ pub enum ExampleEvents {
     Invalid,
 }
 
-impl StateEventTrait for ExampleEvents {}
+impl StateEventConstraint for ExampleEvents {}
 
 // End of Example Event //
 
 // Start of State Impl //
 
 impl Top {
-    pub fn new(delegate: StateEngineDelegate<ExampleStates, ExampleEvents>) -> Box<Self> {
+    pub fn new(delegate: EngineDelegate<ExampleStates, ExampleEvents>) -> Box<Self> {
         Box::new(Self {
             data: ExampleStateData::new(delegate),
         })
     }
 }
 impl A1Impl {
-    pub fn new(delegate: StateEngineDelegate<ExampleStates, ExampleEvents>) -> Box<Self> {
+    pub fn new(delegate: EngineDelegate<ExampleStates, ExampleEvents>) -> Box<Self> {
         Box::new(Self {
             data: ExampleStateData::new(delegate),
         })
     }
 }
 impl B1Impl {
-    pub fn new(delegate: StateEngineDelegate<ExampleStates, ExampleEvents>) -> Box<Self> {
+    pub fn new(delegate: EngineDelegate<ExampleStates, ExampleEvents>) -> Box<Self> {
         Box::new(Self {
             data: ExampleStateData::new(delegate),
         })
     }
 }
 impl A2Impl {
-    pub fn new(delegate: StateEngineDelegate<ExampleStates, ExampleEvents>) -> Box<Self> {
+    pub fn new(delegate: EngineDelegate<ExampleStates, ExampleEvents>) -> Box<Self> {
         Box::new(Self {
             data: ExampleStateData::new(delegate),
         })
@@ -151,30 +160,30 @@ impl A2Impl {
 // State impls of the StateIF
 
 impl StateIF<ExampleStates, ExampleEvents> for Top {
-    fn handle_event(&mut self, event: &ExampleEvents) -> bool {
+    fn handle_event(&self, event: &ExampleEvents) -> bool {
         match event {
             ExampleEvents::A => {
-                self.data.count_a_handled_true += 1;
+                self.data.borrow_mut().count_a_handled_true += 1;
                 true
             }
             ExampleEvents::B(_) => {
-                self.data.count_b_handled_true += 1;
+                self.data.borrow_mut().count_b_handled_true += 1;
                 true
             }
             ExampleEvents::C => {
-                self.data.count_c_handled_true += 1;
+                self.data.borrow_mut().count_c_handled_true += 1;
                 true
             }
             ExampleEvents::D => {
-                self.data.count_d_handled_true += 1;
+                self.data.borrow_mut().count_d_handled_true += 1;
                 true
             }
             ExampleEvents::E(_) => {
-                self.data.count_e_handled_true += 1;
+                self.data.borrow_mut().count_e_handled_true += 1;
                 true
             }
             ExampleEvents::F(_) => {
-                self.data.count_f_handled_true += 1;
+                self.data.borrow_mut().count_f_handled_true += 1;
                 true
             }
             ExampleEvents::InvalidNumArgs(_) => true,
@@ -183,38 +192,38 @@ impl StateIF<ExampleStates, ExampleEvents> for Top {
         }
     }
 
-    fn handle_state_start(&mut self) {
-        self.data.state_entered = true;
+    fn handle_state_start(&self) {
+        self.data.borrow_mut().state_entered = true;
     }
 
-    fn handle_state_exit(&mut self) {
-        self.data.state_exited = true;
+    fn handle_state_exit(&self) {
+        self.data.borrow_mut().state_exited = true;
     }
 }
 
 impl StateIF<ExampleStates, ExampleEvents> for A1Impl {
-    fn handle_event(&mut self, event: &ExampleEvents) -> bool {
+    fn handle_event(&self, event: &ExampleEvents) -> bool {
         // A1 handles all events besides b
         match event {
             ExampleEvents::A => {
-                self.data.count_a_handled_true += 1;
+                self.data.borrow_mut().count_a_handled_true += 1;
                 true
             }
             ExampleEvents::B(_) => false,
             ExampleEvents::C => {
-                self.data.count_c_handled_true += 1;
+                self.data.borrow_mut().count_c_handled_true += 1;
                 true
             }
             ExampleEvents::D => {
-                self.data.count_d_handled_true += 1;
+                self.data.borrow_mut().count_d_handled_true += 1;
                 true
             }
             ExampleEvents::E(_) => {
-                self.data.count_e_handled_true += 1;
+                self.data.borrow_mut().count_e_handled_true += 1;
                 true
             }
             ExampleEvents::F(_) => {
-                self.data.count_f_handled_true += 1;
+                self.data.borrow_mut().count_f_handled_true += 1;
                 true
             }
             ExampleEvents::InvalidNumArgs(_) => true,
@@ -223,40 +232,40 @@ impl StateIF<ExampleStates, ExampleEvents> for A1Impl {
         }
     }
 
-    fn handle_state_start(&mut self) {
-        self.data.state_entered = true;
+    fn handle_state_start(&self) {
+        self.data.borrow_mut().state_entered = true;
     }
 
-    fn handle_state_exit(&mut self) {
-        self.data.state_exited = true;
+    fn handle_state_exit(&self) {
+        self.data.borrow_mut().state_exited = true;
     }
 }
 
 impl StateIF<ExampleStates, ExampleEvents> for B1Impl {
-    fn handle_event(&mut self, event: &ExampleEvents) -> bool {
+    fn handle_event(&self, event: &ExampleEvents) -> bool {
         // B handles all events besides A
         match event {
             ExampleEvents::A => {
                 return false;
             }
             ExampleEvents::B(_) => {
-                self.data.count_b_handled_true += 1;
+                self.data.borrow_mut().count_b_handled_true += 1;
                 true
             }
             ExampleEvents::C => {
-                self.data.count_c_handled_true += 1;
+                self.data.borrow_mut().count_c_handled_true += 1;
                 true
             }
             ExampleEvents::D => {
-                self.data.count_d_handled_true += 1;
+                self.data.borrow_mut().count_d_handled_true += 1;
                 true
             }
             ExampleEvents::E(_) => {
-                self.data.count_e_handled_true += 1;
+                self.data.borrow_mut().count_e_handled_true += 1;
                 true
             }
             ExampleEvents::F(_) => {
-                self.data.count_f_handled_true += 1;
+                self.data.borrow_mut().count_f_handled_true += 1;
                 true
             }
             ExampleEvents::InvalidNumArgs(_) => true,
@@ -265,22 +274,22 @@ impl StateIF<ExampleStates, ExampleEvents> for B1Impl {
         }
     }
 
-    fn handle_state_start(&mut self) {
-        self.data.state_entered = true;
+    fn handle_state_start(&self) {
+        self.data.borrow_mut().state_entered = true;
     }
 
-    fn handle_state_exit(&mut self) {
-        self.data.state_exited = true;
+    fn handle_state_exit(&self) {
+        self.data.borrow_mut().state_exited = true;
     }
 }
 
 impl StateIF<ExampleStates, ExampleEvents> for A2Impl {
-    fn handle_event(&mut self, event: &ExampleEvents) -> bool {
+    fn handle_event(&self, event: &ExampleEvents) -> bool {
         // A2 only handles B. All other events are handled by our parent
         match event {
             ExampleEvents::A => false,
             ExampleEvents::B(_) => {
-                self.data.count_b_handled_true += 1;
+                self.data.borrow_mut().count_b_handled_true += 1;
                 true
             }
             ExampleEvents::C => false,
@@ -293,12 +302,12 @@ impl StateIF<ExampleStates, ExampleEvents> for A2Impl {
         }
     }
 
-    fn handle_state_start(&mut self) {
-        self.data.state_entered = true;
+    fn handle_state_start(&self) {
+        self.data.borrow_mut().state_entered = true;
     }
 
-    fn handle_state_exit(&mut self) {
-        self.data.state_exited = true;
+    fn handle_state_exit(&self) {
+        self.data.borrow_mut().state_exited = true;
     }
 }
 

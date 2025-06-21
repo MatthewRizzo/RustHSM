@@ -1,4 +1,4 @@
-use rust_hsm::events::StateEventTrait;
+use rust_hsm::events::StateEventConstraint;
 use strum::Display;
 
 #[derive(Debug, Display)]
@@ -15,4 +15,4 @@ pub enum LightEvents {
     Invalid,
 }
 
-impl StateEventTrait for LightEvents {}
+impl StateEventConstraint for LightEvents {}

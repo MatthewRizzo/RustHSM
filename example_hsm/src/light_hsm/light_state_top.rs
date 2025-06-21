@@ -18,21 +18,21 @@ impl LightStateTop {
 }
 
 impl StateIF<LightStates, LightEvents> for LightStateTop {
-    fn handle_event(&mut self, event: &LightEvents) -> bool {
+    fn handle_event(&self, event: &LightEvents) -> bool {
         // top returns true for all events
         match event {
             _ => true,
         }
     }
-    fn handle_state_start(&mut self) {
+    fn handle_state_start(&self) {
         self.shared_data.borrow_mut().top_start_called += 1;
     }
 
-    fn handle_state_enter(&mut self) {
+    fn handle_state_enter(&self) {
         self.shared_data.borrow_mut().top_enter_called += 1;
     }
 
-    fn handle_state_exit(&mut self) {
+    fn handle_state_exit(&self) {
         self.shared_data.borrow_mut().top_exit_called += 1;
     }
 }
