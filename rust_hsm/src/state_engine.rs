@@ -483,7 +483,7 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> EngineDelegateIF<Sta
         self.logger.log_info(
             get_function_name!(),
             format!(
-                "{}: [Adding event {} to queue while]",
+                "{0}: [Adding event {1} to queue while handling {0}]",
                 in_progress_event_name,
                 event.get_event_name()
             )
