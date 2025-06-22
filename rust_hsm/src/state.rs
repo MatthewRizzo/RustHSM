@@ -12,7 +12,7 @@ pub trait StateConstraint: Display + Into<u16> + From<u16> + Clone {}
 
 /// An inexpensive token representing a state that can be exchanged for more
 /// complex data structures.
-#[derive(Eq, Hash, PartialEq, Clone, Debug)]
+#[derive(Eq, Hash, PartialEq, Clone, Debug, Copy)]
 pub(crate) struct StateId {
     id: u16,
 }

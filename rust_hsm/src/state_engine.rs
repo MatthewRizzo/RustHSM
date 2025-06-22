@@ -12,14 +12,19 @@ use crate::{
 use core::fmt::Display;
 use log::LevelFilter;
 
-use std::{cell::RefCell, default::Default, marker::PhantomData, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    default::Default,
+    marker::PhantomData,
+    rc::Rc,
+};
 
 /// Runs the orchestration of the state 'machine' while considering its hierarchy/
 /// TODO - remove RefCell for StateMapping using a builder.
 // High Level: Engine owns states, states own Rc/shared reference to engine's delegate
 pub struct HSMEngine<StateT: StateConstraint, EventT: StateEventConstraint> {
     pub(crate) hsm_name: String,
-    pub(crate) current_state: RefCell<Option<StateId>>,
+    pub(crate) current_state: Cell<Option<StateId>>,
     /// Used to cache the current known sequence of events and or how we handled the current event.
     pub(crate) current_handle_string: RefCell<String>,
     pub(crate) state_mapping: RefCell<StateMapping<StateT, EventT>>,
@@ -28,7 +33,7 @@ pub struct HSMEngine<StateT: StateConstraint, EventT: StateEventConstraint> {
     // These are events that are queued up while handling other events
     pending_events: RefCell<Vec<EventT>>,
     // Track if we have already changed state whole handling an event
-    already_changed_state: RefCell<bool>,
+    already_changed_state: Cell<bool>,
     /// When handling an event, it is moved/owned by us in this variable.
     /// Also acts as a tracker for if we are in the middle of handling an event.
     /// Why important? What if in handle_event, a state tells their controller to dispatch an event back at us?
@@ -47,13 +52,13 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> HSMEngine<StateT, Ev
     ) -> HSMResult<Rc<HSMEngine<StateT, EventT>>, StateT> {
         let engine = HSMEngine {
             hsm_name,
-            current_state: RefCell::new(None),
+            current_state: Cell::new(None),
             current_handle_string: RefCell::new(String::new()),
             state_mapping: RefCell::new(StateMapping::<StateT, EventT>::new_default()),
             logger: HSMLogger::new(logger_level),
             pending_events: Default::default(),
             phantom_state_enum: PhantomData,
-            already_changed_state: RefCell::new(false),
+            already_changed_state: Cell::new(false),
             in_progress_event_name: RefCell::new(None),
         };
         Ok(Rc::new(engine))
@@ -76,7 +81,7 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> HSMEngine<StateT, Ev
         let new_state_id = StateId::new(new_state_metadata.into());
         self.state_mapping
             .borrow_mut()
-            .add_state_internal(new_state_id.clone(), parent_state)?;
+            .add_state_internal(new_state_id, parent_state)?;
         self.state_mapping
             .borrow_mut()
             .transfer_state(new_state, new_state_id)
@@ -106,15 +111,14 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> HSMEngine<StateT, Ev
             )
             .as_str(),
         );
-        *self.current_state.borrow_mut() = Some(initial_state_struct.clone());
+        self.current_state.set(Some(initial_state_struct.clone()));
         self.enter_states_lca_to_target(initial_state_struct, true)
     }
 
     pub fn get_current_state(&self) -> HSMResult<StateT, StateT> {
         let state: StateT = (*self
             .current_state
-            .borrow()
-            .as_ref()
+            .get()
             .ok_or_else(|| HSMError::EngineNotInitialized())?
             .to_owned()
             .get_id())
@@ -130,7 +134,7 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> HSMEngine<StateT, Ev
         // State id is the variable updated each loop!
         let event_start_state_id = self
             .current_state
-            .borrow()
+            .get()
             .clone()
             .ok_or_else(|| HSMError::EngineNotInitialized())?;
 
@@ -210,7 +214,7 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> HSMEngine<StateT, Ev
             );
 
             // Maybe the parent state handles this
-            current_state_id = next_state_id.clone();
+            current_state_id = next_state_id;
         }
 
         // If we get here, the event has been handled by at least one state (or none and we error'd)
@@ -236,7 +240,7 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> HSMEngine<StateT, Ev
     /// # NOTE
     /// CHANGE STATES ARE ENQUEUED via delegate!
     fn handle_state_change(&self, requested_state: StateId) -> HSMResult<(), StateT> {
-        let is_target_current = self.current_state.borrow().as_ref() == Some(&requested_state);
+        let is_target_current = self.current_state.get() == Some(requested_state);
 
         // We don't clear requests once completed - requires too much mutable access
         // Just no-op on all subsequent events
@@ -263,17 +267,15 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> HSMEngine<StateT, Ev
 
         let lca_state_id = self.find_lca(
             self.current_state
-                .borrow()
-                .clone()
+                .get()
                 .ok_or_else(|| HSMError::EngineNotInitialized())?,
-            requested_state.clone(),
+            requested_state,
         )?;
 
         if lca_state_id
-            != *self
+            != self
                 .current_state
-                .borrow()
-                .as_ref()
+                .get()
                 .ok_or_else(|| HSMError::EngineNotInitialized())?
         {
             self.exit_states_until_target(lca_state_id)?;
@@ -299,7 +301,7 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> HSMEngine<StateT, Ev
         self.update_handle_string("[");
         let mut exited_first_state = false;
 
-        let mut current_state_id = self.current_state.borrow().clone();
+        let mut current_state_id = self.current_state.get();
         match current_state_id {
             Some(_) => Ok(()),
             None => Err(HSMError::EngineNotInitialized()),
@@ -307,14 +309,14 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> HSMEngine<StateT, Ev
 
         self.state_mapping
             .borrow()
-            .is_state_id_valid_result(&current_state_id.clone().unwrap())?;
+            .is_state_id_valid_result(&current_state_id.unwrap())?;
 
         loop {
-            match current_state_id.clone() {
+            match current_state_id {
                 // None => break, // Happens when we reach top. The "next" computes a None
                 None => break, // Happens when we reach top. The "next" computes a None
                 Some(state_id) => {
-                    if state_id == target_state_id.clone() {
+                    if state_id == target_state_id {
                         // Once we reach the LCA/target, stop exiting
                         break;
                     }
@@ -323,7 +325,7 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> HSMEngine<StateT, Ev
                         .is_state_id_valid_result(&state_id)?
                 }
             };
-            let unwrapped_id = current_state_id.clone().unwrap();
+            let unwrapped_id = current_state_id.unwrap();
 
             let current_state_name = resolve_state_name::<StateT>(&unwrapped_id);
 
@@ -339,9 +341,7 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> HSMEngine<StateT, Ev
                 .handle_state_exit(&unwrapped_id)?;
 
             let next_state_id = self.state_mapping.borrow().get_parent_state_id(
-                &current_state_id
-                    .clone()
-                    .expect("Already break'd if this wasn't true!"),
+                &current_state_id.expect("Already break'd if this wasn't true!"),
             );
             current_state_id = next_state_id;
             exited_first_state = true;
@@ -427,8 +427,8 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> HSMEngine<StateT, Ev
     }
 
     fn set_current_state(&self, new_current_state: &StateId) -> HSMResult<(), StateT> {
-        *self.current_state.borrow_mut() = Some(new_current_state.clone());
-        *self.already_changed_state.borrow_mut() = false;
+        self.current_state.set(Some(*new_current_state));
+        self.already_changed_state.set(false);
         Ok(())
     }
 
@@ -453,14 +453,13 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> EngineDelegateIF<Sta
             None => String::from("Unknown"),
             Some(name) => name.clone(),
         };
-        if *self.already_changed_state.borrow() {
+        if self.already_changed_state.get() {
             let err = HSMError::MultipleConcurrentChangeState(
                 StateT::from(new_state),
                 StateT::from(
                     *self
                         .current_state
-                        .borrow()
-                        .as_ref()
+                        .get()
                         .ok_or_else(|| HSMError::EngineNotInitialized())?
                         .get_id(),
                 ),
@@ -472,7 +471,7 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> EngineDelegateIF<Sta
                 return Err(err);
             }
         }
-        *self.already_changed_state.borrow_mut() = true;
+        self.already_changed_state.set(true);
         self.handle_state_change(StateId::from(new_state))
     }
 
