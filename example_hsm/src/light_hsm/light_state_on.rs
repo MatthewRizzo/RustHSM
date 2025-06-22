@@ -1,18 +1,18 @@
-use rust_hsm::{state::StateIF, state_engine_delegate::EngineDelegate};
+use rust_hsm::{state::StateIF, state_engine_delegate::WeakDelegate};
 
 use crate::{
     light_events::LightEvents, light_hsm_data::LightHsmDataRef, light_states::LightStates,
 };
 
 pub(crate) struct LightStateOn {
-    delegate: EngineDelegate<LightStates, LightEvents>,
+    delegate: WeakDelegate<LightStates, LightEvents>,
     shared_data: LightHsmDataRef,
 }
 
 impl LightStateOn {
     pub fn new(
         shared_data: LightHsmDataRef,
-        delegate: EngineDelegate<LightStates, LightEvents>,
+        delegate: WeakDelegate<LightStates, LightEvents>,
     ) -> Box<Self> {
         Box::new(Self {
             delegate,
@@ -25,9 +25,12 @@ impl LightStateOn {
     }
 
     fn handle_turn_off(&self) -> bool {
-        match self.delegate.change_state(LightStates::OFF as u16) {
-            Ok(()) => true,
-            Err(_) => false,
+        match self.delegate.upgrade() {
+            None => false,
+            Some(rc) => match rc.change_state(LightStates::OFF as u16) {
+                Ok(()) => true,
+                Err(_) => false,
+            },
         }
     }
 }

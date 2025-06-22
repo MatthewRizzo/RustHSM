@@ -30,10 +30,10 @@ macro_rules! get_function_name {
         let split_res = path.split_terminator("::").collect::<Vec<&str>>();
         match split_res.len().checked_sub(2) {
             None => path.to_string(),
-            Some(second_last_index) => split_res.split_at(second_last_index).1.join("::")
+            Some(second_last_index) => split_res.split_at(second_last_index).1.join("::"),
         }
-
-    }.to_string()};
+    }
+    .to_string()};
 }
 pub(crate) use get_function_name;
 

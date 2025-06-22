@@ -5,7 +5,7 @@ use crate::{
     events::StateEventConstraint,
     logger::HSMLogger,
     state::{StateBox, StateConstraint, StateId},
-    state_engine_delegate::EngineDelegateIF,
+    state_engine_delegate::{EngineDelegateIF, SharedDelegate, WeakDelegate},
     state_mapping::StateMapping,
     utils::{self, get_function_name, resolve_state_name},
 };
@@ -16,19 +16,19 @@ use std::{
     cell::{Cell, RefCell},
     default::Default,
     marker::PhantomData,
-    rc::Rc,
+    rc::{Rc, Weak},
 };
 
 /// Runs the orchestration of the state 'machine' while considering its hierarchy/
 /// TODO - remove RefCell for StateMapping using a builder.
 // High Level: Engine owns states, states own Rc/shared reference to engine's delegate
-pub struct HSMEngine<StateT: StateConstraint, EventT: StateEventConstraint> {
-    pub(crate) hsm_name: String,
-    pub(crate) current_state: Cell<Option<StateId>>,
+pub(crate) struct HSMEngine<StateT: StateConstraint, EventT: StateEventConstraint> {
+    hsm_name: String,
+    current_state: Cell<Option<StateId>>,
     /// Used to cache the current known sequence of events and or how we handled the current event.
-    pub(crate) current_handle_string: RefCell<String>,
-    pub(crate) state_mapping: RefCell<StateMapping<StateT, EventT>>,
-    pub(crate) logger: HSMLogger,
+    current_handle_string: RefCell<String>,
+    state_mapping: RefCell<StateMapping<StateT, EventT>>,
+    logger: HSMLogger,
     // This is risky and could lead to us getting stuck!
     // These are events that are queued up while handling other events
     pending_events: RefCell<Vec<EventT>>,
@@ -39,17 +39,20 @@ pub struct HSMEngine<StateT: StateConstraint, EventT: StateEventConstraint> {
     /// Why important? What if in handle_event, a state tells their controller to dispatch an event back at us?
     /// We use this to know that the event should be queued up.
     in_progress_event_name: RefCell<Option<String>>,
-    pub(crate) phantom_state_enum: PhantomData<StateT>,
+    phantom_state_enum: PhantomData<StateT>,
 }
+
+pub(crate) type SharedEngine<StateT, EventT> = Rc<HSMEngine<StateT, EventT>>;
+pub(crate) type WeakEngine<StateT, EventT> = Weak<HSMEngine<StateT, EventT>>;
 
 impl<StateT: StateConstraint, EventT: StateEventConstraint> HSMEngine<StateT, EventT> {
     /// Create an HSM engine.
     /// Highly recommend NOT exposing the HSMEngine beyond your container.
     /// Will need to be built up after the fact - via the builder!
-    pub (crate) fn new(
+    fn new(
         hsm_name: String,
         logger_level: LevelFilter,
-    ) -> HSMResult<Rc<HSMEngine<StateT, EventT>>, StateT> {
+    ) -> HSMResult<SharedEngine<StateT, EventT>, StateT> {
         let engine = HSMEngine {
             hsm_name,
             current_state: Cell::new(None),
@@ -111,7 +114,7 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> HSMEngine<StateT, Ev
             )
             .as_str(),
         );
-        self.current_state.set(Some(initial_state_struct.clone()));
+        self.current_state.set(Some(initial_state_struct));
         self.enter_states_lca_to_target(initial_state_struct, true)
     }
 
@@ -135,7 +138,6 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> HSMEngine<StateT, Ev
         let event_start_state_id = self
             .current_state
             .get()
-            .clone()
             .ok_or_else(|| HSMError::EngineNotInitialized())?;
 
         // Validate the current state can handle events / is in the mapping
@@ -491,6 +493,55 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> EngineDelegateIF<Sta
         );
         self.pending_events.borrow_mut().push(event);
         Ok(())
+    }
+}
+
+/// # Brief
+/// Main container/entry way to using the hsm!
+/// Acts as the lifetime manager for the engine and the states the engine drives
+pub struct HSM<StateT: StateConstraint, EventT: StateEventConstraint> {
+    engine: SharedEngine<StateT, EventT>,
+}
+
+impl<StateT: StateConstraint + 'static, EventT: StateEventConstraint + 'static>
+    HSM<StateT, EventT>
+{
+    pub fn new(
+        hsm_name: String,
+        logger_level: LevelFilter,
+    ) -> HSMResult<HSM<StateT, EventT>, StateT> {
+        Ok(Self {
+            engine: HSMEngine::new(hsm_name, logger_level)?,
+        })
+    }
+
+    pub fn get_delegate(&self) -> WeakDelegate<StateT, EventT> {
+        let rc_dyn: SharedDelegate<StateT, EventT> = self.engine.clone();
+        let weak: WeakDelegate<StateT, EventT> = Rc::downgrade(&rc_dyn);
+        weak
+    }
+
+    /// # Brief
+    /// Add a state to be used by the HSM
+    pub fn add_state<T: Display + Into<u16> + From<u16>>(
+        &self,
+        new_state: StateBox<StateT, EventT>,
+        new_state_metadata: T,
+        parent_state: Option<T>,
+    ) -> HSMResult<(), StateT> {
+        self.engine
+            .add_state(new_state, new_state_metadata, parent_state)
+    }
+
+    pub fn init(&self, starting_state: u16) -> HSMResult<(), StateT> {
+        self.engine.init(starting_state)
+    }
+
+    pub fn get_current_state(&self) -> HSMResult<StateT, StateT> {
+        self.engine.get_current_state()
+    }
+    pub fn dispatch_event(&self, event: EventT) -> HSMResult<(), StateT> {
+        self.engine.dispatch_event(event)
     }
 }
 
