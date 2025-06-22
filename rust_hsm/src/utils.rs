@@ -7,7 +7,6 @@ pub(crate) fn get_state_choice<States: From<u16>>(state_id: &StateId) -> States 
 pub(crate) fn resolve_state_name<States: std::fmt::Display + From<u16>>(
     state_id: &StateId,
 ) -> String {
-    // get_state_choice::<States>(state_id).to_string()
     format!("{}", get_state_choice::<States>(state_id))
 }
 
@@ -27,22 +26,13 @@ pub(crate) use get_function_path;
 // Returns the function name along with its direct owner!
 macro_rules! get_function_name {
     () => {{
-        // let mut name: String = "";
         let path: &'static str = crate::utils::get_function_path!();
         let split_res = path.split_terminator("::").collect::<Vec<&str>>();
-        // println!("{:?}", split_res);
-        // &split_res.join("")
         match split_res.len().checked_sub(2) {
             None => path.to_string(),
             Some(second_last_index) => split_res.split_at(second_last_index).1.join("::")
-            // Some(second_last_index) => {
-                // split_res.split_at(second_last_index).1.join("")
-                // (split_res[second_last_index].to_string() + split_res[second_last_index - 1]).as_str()
-            // }
         }
-        // name
 
-        // split_res.last().unwrap()
     }.to_string()};
 }
 pub(crate) use get_function_name;

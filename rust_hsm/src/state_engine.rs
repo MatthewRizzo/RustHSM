@@ -46,7 +46,7 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> HSMEngine<StateT, Ev
     /// Create an HSM engine.
     /// Highly recommend NOT exposing the HSMEngine beyond your container.
     /// Will need to be built up after the fact - via the builder!
-    pub fn new(
+    pub (crate) fn new(
         hsm_name: String,
         logger_level: LevelFilter,
     ) -> HSMResult<Rc<HSMEngine<StateT, EventT>>, StateT> {
