@@ -2,7 +2,7 @@
 //! Using this info, the entire "tree" of states can be resolved!
 
 use log::{self, LevelFilter};
-use std::{cell::RefCell, collections::HashMap};
+use std::{cell::Cell, collections::HashMap};
 
 use crate::{
     errors::{HSMError, HSMResult},
@@ -17,7 +17,7 @@ use crate::{
 /// In exchange, it allows us access API's when we provide tokens (StateId).
 /// Similarly, when it reports info back to us, it does so with tokens.
 pub(crate) struct StateMapping<StateT: StateConstraint, EventT: StateEventConstraint> {
-    top_state_id: RefCell<Option<StateId>>,
+    top_state_id: Cell<Option<StateId>>,
     // state id -> state
     state_map: HashMap<StateId, StateContainer<StateT, EventT>>,
     /// stateid -> parent state
@@ -38,7 +38,7 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> StateMapping<StateT,
         state_map.keys().len();
 
         Self {
-            top_state_id: RefCell::new(Some(top_state_id)),
+            top_state_id: Cell::new(Some(top_state_id)),
             state_map,
             state_parent_map: raw_state_parent_map,
             logger: logger.unwrap_or(HSMLogger::from(LevelFilter::Info)),
@@ -47,7 +47,7 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> StateMapping<StateT,
 
     pub(crate) fn new_default() -> Self {
         Self {
-            top_state_id: RefCell::new(None),
+            top_state_id: Cell::new(None),
             state_map: HashMap::new(),
             state_parent_map: HashMap::new(),
             logger: HSMLogger::from(LevelFilter::Info),
@@ -60,13 +60,10 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> StateMapping<StateT,
         new_state_id: StateId,
     ) -> HSMResult<(), StateT> {
         let new_state_container: StateContainer<StateT, EventT> =
-            StateContainer::new(new_state_id.clone(), new_state);
+            StateContainer::new(new_state_id, new_state);
 
         // Validate the state has not been added already!
-        match self
-            .state_map
-            .insert(new_state_id.clone(), new_state_container)
-        {
+        match self.state_map.insert(new_state_id, new_state_container) {
             None => Ok(()),
             Some(_) => Err(HSMError::AddDuplicateStateId(
                 StateT::from(*new_state_id.get_id()),
@@ -83,7 +80,7 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> StateMapping<StateT,
         parent_state: Option<T>,
     ) -> HSMResult<(), StateT> {
         let new_state_name = resolve_state_name::<StateT>(&new_state_id);
-        if let Some(chosen_top) = self.top_state_id.borrow().clone() {
+        if let Some(chosen_top) = self.top_state_id.get() {
             if new_state_id != chosen_top && parent_state.is_none() {
                 return Err(HSMError::MultipleTopState(
                     resolve_state_name::<StateT>(&chosen_top),
@@ -99,7 +96,7 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> StateMapping<StateT,
             let parent_state_metadata = parent_state.unwrap();
             parent_state_id = Some(StateId::new(parent_state_metadata.into()));
             self.state_parent_map
-                .insert(new_state_id.clone(), parent_state_id.clone().unwrap());
+                .insert(new_state_id, parent_state_id.unwrap());
         }
 
         self.logger.log_debug(
@@ -206,7 +203,7 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> StateMapping<StateT,
         if shared_paths.is_empty() {
             return Err(HSMError::LCAOfSameNode());
         }
-        let last_known_common_state = shared_paths.iter().last().unwrap().0.clone();
+        let last_known_common_state = *shared_paths.iter().last().unwrap().0;
 
         Ok(last_known_common_state)
     }
@@ -217,15 +214,14 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> StateMapping<StateT,
         &self,
         start_node: &StateId,
     ) -> HSMResult<Vec<StateId>, StateT> {
-        let mut current_node_id = start_node.clone();
+        let mut current_node_id: StateId = *start_node;
         let current_node = self
             .state_map
             .get(start_node)
             .ok_or_else(|| {
                 HSMError::InvalidStateId(StateT::from(*start_node.get_id()), get_function_name!())
             })?
-            .state_id
-            .clone();
+            .state_id;
         let mut path_to_root: Vec<StateId> = vec![current_node];
 
         loop {
@@ -247,7 +243,7 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> StateMapping<StateT,
                         )),
                         true => Ok(()),
                     }?;
-                    path_to_root.push(parent_id.clone());
+                    path_to_root.push(parent_id);
                     self.logger.log_debug(
                         get_function_name!(),
                         format!("Next State: {}", StateT::from(*parent_id.get_id())).as_str(),
@@ -317,7 +313,7 @@ mod tests {
     }
 
     fn resolve_path_to_id(path: &Vec<StateId>) -> Vec<StateId> {
-        path.iter().map(|state_id| state_id.clone()).collect()
+        path.iter().map(|state_id| *state_id).collect()
     }
 
     #[test]
