@@ -4,13 +4,13 @@ use crate::{
     examples::ExampleStates,
     examples::*,
     state::{StateConstraint, StateIF, StateId},
-    state_engine::HSMEngine,
+    state_engine::HSM,
     state_engine_delegate::delegate_test_utils::MockedDelegate,
 };
 
 use log;
 use log::LevelFilter;
-use std::{cell::RefCell, ops::Add, rc::Rc};
+use std::{cell::RefCell, ops::Add};
 
 pub struct DummyStateStruct<ExampleStates: StateConstraint> {
     state_started: RefCell<bool>,
@@ -55,7 +55,7 @@ impl DummyStateStruct<ExampleStates> {
         Box::new(Self {
             state_started: RefCell::new(false),
             _delegate: MockedDelegate::new(),
-            _num_created: num_states_created_counter.clone(),
+            _num_created: *num_states_created_counter,
         })
     }
 }
@@ -68,22 +68,19 @@ pub(crate) fn cast_id_vector(state_list: &Vec<StateId>) -> Vec<ExampleStates> {
     states
 }
 
-pub fn create_test_hsm() -> Rc<HSMEngine<ExampleStates, ExampleEvents>> {
-    let engine = HSMEngine::new("TestHsm".to_string(), LevelFilter::Info).unwrap();
-    let top = Top::new(HSMEngine::get_delegate(&engine));
-    let a1 = A1Impl::new(HSMEngine::get_delegate(&engine));
-    let b1 = B1Impl::new(HSMEngine::get_delegate(&engine));
-    let a2 = A2Impl::new(HSMEngine::get_delegate(&engine));
+pub fn create_test_hsm() -> HSM<ExampleStates, ExampleEvents> {
+    let hsm = HSM::new("TestHsm".to_string(), LevelFilter::Info).unwrap();
+    let top = Top::new(hsm.get_delegate());
+    let a1 = A1Impl::new(hsm.get_delegate());
+    let b1 = B1Impl::new(hsm.get_delegate());
+    let a2 = A2Impl::new(hsm.get_delegate());
 
-    engine.add_state(top, ExampleStates::Top, None).unwrap();
-    engine
-        .add_state(a1, ExampleStates::LevelA1, Some(ExampleStates::Top))
+    hsm.add_state(top, ExampleStates::Top, None).unwrap();
+    hsm.add_state(a1, ExampleStates::LevelA1, Some(ExampleStates::Top))
         .unwrap();
-    engine
-        .add_state(b1, ExampleStates::LevelB1, Some(ExampleStates::Top))
+    hsm.add_state(b1, ExampleStates::LevelB1, Some(ExampleStates::Top))
         .unwrap();
-    engine
-        .add_state(a2, ExampleStates::LevelA2, Some(ExampleStates::LevelA1))
+    hsm.add_state(a2, ExampleStates::LevelA2, Some(ExampleStates::LevelA1))
         .unwrap();
-    engine
+    hsm
 }

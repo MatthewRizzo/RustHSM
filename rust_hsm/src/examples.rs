@@ -2,7 +2,7 @@
 use crate::{
     events::StateEventConstraint,
     state::{StateConstraint, StateIF, StateId},
-    state_engine_delegate::EngineDelegate,
+    state_engine_delegate::WeakDelegate,
 };
 
 use std::cell::RefCell;
@@ -55,11 +55,11 @@ pub struct ExampleStateData {
     pub count_d_handled_true: u16,
     pub count_e_handled_true: u16,
     pub count_f_handled_true: u16,
-    pub delegate: EngineDelegate<ExampleStates, ExampleEvents>,
+    pub delegate: WeakDelegate<ExampleStates, ExampleEvents>,
 }
 
 impl ExampleStateData {
-    pub fn new(delegate: EngineDelegate<ExampleStates, ExampleEvents>) -> RefCell<Self> {
+    pub fn new(delegate: WeakDelegate<ExampleStates, ExampleEvents>) -> RefCell<Self> {
         RefCell::new(Self {
             state_entered: false,
             state_exited: false,
@@ -127,28 +127,28 @@ impl StateEventConstraint for ExampleEvents {}
 // Start of State Impl //
 
 impl Top {
-    pub fn new(delegate: EngineDelegate<ExampleStates, ExampleEvents>) -> Box<Self> {
+    pub fn new(delegate: WeakDelegate<ExampleStates, ExampleEvents>) -> Box<Self> {
         Box::new(Self {
             data: ExampleStateData::new(delegate),
         })
     }
 }
 impl A1Impl {
-    pub fn new(delegate: EngineDelegate<ExampleStates, ExampleEvents>) -> Box<Self> {
+    pub fn new(delegate: WeakDelegate<ExampleStates, ExampleEvents>) -> Box<Self> {
         Box::new(Self {
             data: ExampleStateData::new(delegate),
         })
     }
 }
 impl B1Impl {
-    pub fn new(delegate: EngineDelegate<ExampleStates, ExampleEvents>) -> Box<Self> {
+    pub fn new(delegate: WeakDelegate<ExampleStates, ExampleEvents>) -> Box<Self> {
         Box::new(Self {
             data: ExampleStateData::new(delegate),
         })
     }
 }
 impl A2Impl {
-    pub fn new(delegate: EngineDelegate<ExampleStates, ExampleEvents>) -> Box<Self> {
+    pub fn new(delegate: WeakDelegate<ExampleStates, ExampleEvents>) -> Box<Self> {
         Box::new(Self {
             data: ExampleStateData::new(delegate),
         })

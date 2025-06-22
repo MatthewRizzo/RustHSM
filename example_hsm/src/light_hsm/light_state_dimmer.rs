@@ -1,4 +1,8 @@
-use rust_hsm::{state::StateIF, state_engine_delegate::EngineDelegate};
+use rust_hsm::{
+    errors::HSMError,
+    state::StateIF,
+    state_engine_delegate::WeakDelegate,
+};
 
 use crate::{
     light_events::LightEvents,
@@ -7,14 +11,14 @@ use crate::{
 };
 
 pub(crate) struct LightStateDimmer {
-    delegate: EngineDelegate<LightStates, LightEvents>,
+    delegate: WeakDelegate<LightStates, LightEvents>,
     shared_data: LightHsmDataRef,
 }
 
 impl LightStateDimmer {
     pub fn new(
         shared_data: LightHsmDataRef,
-        delegate: EngineDelegate<LightStates, LightEvents>,
+        delegate: WeakDelegate<LightStates, LightEvents>,
     ) -> Box<Self> {
         Box::new(Self {
             delegate,
@@ -23,16 +27,25 @@ impl LightStateDimmer {
     }
 
     fn set_to_percentage(&self, percentage: u8) -> bool {
-        let event_res: bool = if percentage == 0 {
-            self.delegate.internal_handle_event(LightEvents::TurnOff)
+        let event_res = if percentage == 0 {
+            match self.delegate.upgrade() {
+                None => Err(HSMError::DelegateUpgradeFail(
+                    "set_to_percentage".to_owned(),
+                )),
+                Some(rc) => rc.internal_handle_event(LightEvents::TurnOff),
+            }
         } else if percentage >= 100 {
-            self.delegate.internal_handle_event(LightEvents::TurnOn)
+            match self.delegate.upgrade() {
+                None => Err(HSMError::DelegateUpgradeFail(
+                    "set_to_percentage".to_owned(),
+                )),
+                Some(rc) => rc.internal_handle_event(LightEvents::TurnOn),
+            }
         } else {
             Ok(())
-        }
-        .map_or_else(|_| false, |_| true);
+        };
 
-        self.shared_data.borrow_mut().set_lighting(percentage) && event_res
+        self.shared_data.borrow_mut().set_lighting(percentage) && event_res.is_ok()
     }
 
     fn set_relative(&self, action: LightAdjustment, relative_percentage: u8) -> bool {

@@ -2,7 +2,7 @@
 use std::{boxed::Box, fmt::Display, vec::Vec};
 
 use crate::{
-    errors::HSMResult, events::StateEventConstraint, state_engine_delegate::EngineDelegate,
+    errors::HSMResult, events::StateEventConstraint, state_engine_delegate::SharedDelegate,
 };
 
 /// All valid definitions of a 'class' of state's must be StateTypes.
@@ -72,7 +72,7 @@ pub trait StateIF<StateT, EventT: StateEventConstraint> {
     fn change_state_during_handle(
         &self,
         new_state: u16,
-        delegate: EngineDelegate<StateT, EventT>,
+        delegate: SharedDelegate<StateT, EventT>,
     ) -> HSMResult<(), StateT> {
         delegate.change_state(new_state)
     }

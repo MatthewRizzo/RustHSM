@@ -8,6 +8,8 @@ pub type HSMResult<T, States> = std::result::Result<T, HSMError<States>>;
 pub enum HSMError<StateT> {
     #[error("State {0} with id {1} already added, but is getting added again!")]
     AddDuplicateStateId(StateT, u16),
+    #[error("Delegate upgrade failed! was this function called while the EngineDelegate was being destroyed? Context: {0}")]
+    DelegateUpgradeFail(String),
     #[error("Event Not Implemented Error: {0}")]
     EventNotImplemented(String),
     #[error("StateEngine was never initialized. Make sure to call init before using state-related API's!")]

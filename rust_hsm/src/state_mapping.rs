@@ -313,7 +313,7 @@ mod tests {
     }
 
     fn resolve_path_to_id(path: &Vec<StateId>) -> Vec<StateId> {
-        path.iter().map(|state_id| *state_id).collect()
+        path.iter().copied().collect()
     }
 
     #[test]
