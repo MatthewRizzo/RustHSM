@@ -1,16 +1,14 @@
 use crate::state::StateId;
 
-pub(crate) fn get_state_choice<StateType: From<u16>>(
-    state_id: &StateId,
-) -> StateType {
-    StateType::from(*state_id.get_id())
+pub(crate) fn get_state_choice<States: From<u16>>(state_id: &StateId) -> States {
+    States::from(*state_id.get_id())
 }
 
-pub(crate) fn resolve_state_name<StateType: std::fmt::Display + From<u16>>(
+pub(crate) fn resolve_state_name<States: std::fmt::Display + From<u16>>(
     state_id: &StateId,
 ) -> String {
-    // get_state_choice::<StateType>(state_id).to_string()
-    format!("{}", get_state_choice::<StateType>(state_id))
+    // get_state_choice::<States>(state_id).to_string()
+    format!("{}", get_state_choice::<States>(state_id))
 }
 
 /// Get the full path to a function from crate downwards
@@ -58,12 +56,11 @@ mod tests {
     // Note 2: I use PartialEq to simplify comparison in the test, but it is not strictly necessary.
     #[repr(u16)]
     #[derive(strum::FromRepr, PartialEq, strum::Display)]
-    enum FakeStateType
-    {
+    enum FakeStateType {
         StateA = 1,
         StateB = 2,
         StateC = 3,
-        Invalid = 4
+        Invalid = 4,
     }
 
     impl From<u16> for FakeStateType {
@@ -84,8 +81,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_state_choice()
-    {
+    fn test_get_state_choice() {
         assert!(get_state_choice::<FakeStateType>(&StateId::new(1)) == FakeStateType::StateA);
         assert!(get_state_choice::<FakeStateType>(&StateId::new(2)) == FakeStateType::StateB);
         assert!(get_state_choice::<FakeStateType>(&StateId::new(3)) == FakeStateType::StateC);
@@ -93,8 +89,7 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_state_name()
-    {
+    fn test_resolve_state_name() {
         assert!(resolve_state_name::<FakeStateType>(&StateId::new(1)) == "StateA");
         assert!(resolve_state_name::<FakeStateType>(&StateId::new(2)) == "StateB");
         assert!(resolve_state_name::<FakeStateType>(&StateId::new(3)) == "StateC");

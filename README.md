@@ -6,7 +6,6 @@ It breaks the HSM into these notable components:
 
 [HsmController]: ./rust_hsm/src/state_controller_trait.rs
 [StateChainOfResponsibility]: ./rust_hsm/src/state.rs
-[StateEventsTrait]: ./rust_hsm/src/events.rs
 
 1. State Controller trait: [HsmController]
 2. Concrete Controller implementing [HsmController]: [HSMEngine](./rust_hsm/src/state_controller.rs)
@@ -15,7 +14,7 @@ It breaks the HSM into these notable components:
 3. States which implement the [StateChainOfResponsibility] trait
    1. Handles flow into / out of a given state
    2. Allows implementers to delegate the handling of their custom enum events within the `handle_event` impl.
-4. Event traits dispatched to the HSM controller: [StateEventTrait]
+4. Event traits dispatched to the HSM controller: [StateEventConstraint]
    1. Your event just needs to implement the trait to slot into the larger system.
 
 There is some boiler plate to setup for these pieces when implementing a new HSM
@@ -28,4 +27,3 @@ Please look at the example [LightHsm](./example_hsm/) to see how the library
 can be consumed!
 
 Some functions also have MVP examples in their docs.
-

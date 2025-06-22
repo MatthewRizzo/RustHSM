@@ -1,10 +1,10 @@
 use crate::{
     errors::{HSMError, HSMResult},
-    events::StateEventTrait,
+    events::StateEventConstraint,
     logger::HSMLogger,
-    state::{StateBox, StateContainer, StateId, StateTypeTrait},
-    state_engine_channel_delegate::{StateEngineDelegate, StateEngineMessages},
-    state_mapping::StateMapping,
+    state::{StateBox, StateConstraint, StateId, States},
+    state_engine_delegate::EngineDelegateIF,
+    state_mapping::{self, StateMapping},
     utils::{self, get_function_name, resolve_state_name},
 };
 ///! This file contains the logic for a state engine comprised of many
@@ -15,107 +15,171 @@ use log::LevelFilter;
 use std::{
     cell::RefCell,
     collections::HashMap,
-    default::Default,
+    default::{self, Default},
     marker::PhantomData,
-    sync::mpsc::{channel, Receiver, Sender},
-    time::Duration,
+    rc::{self, Rc, Weak},
+    vec,
 };
 
 /// Runs the orchestration of the state 'machine' while considering its hierarchy/
-// TODO - add a generic for state events too!
-pub struct HSMEngine<StateType: StateTypeTrait, StateEvents: StateEventTrait> {
+/// TODO - remove RefCell for StateMapping using a builder.
+// High Level: Engine owns states, states own Rc/shared reference to engine's delegate
+pub struct HSMEngine<StateT: StateConstraint, EventT: StateEventConstraint> {
     pub(crate) hsm_name: String,
-    pub(crate) current_state: StateId,
-    /// Used to cache the current known sequence of events
-    pub(crate) state_change_string: RefCell<String>,
-    pub(crate) state_mapping: StateMapping<StateType, StateEvents>,
+    pub(crate) current_state: RefCell<Option<StateId>>,
+    /// Used to cache the current known sequence of events and or how we handled the current event.
+    pub(crate) current_handle_string: RefCell<String>,
+    pub(crate) state_mapping: RefCell<StateMapping<StateT, EventT>>,
     pub(crate) logger: HSMLogger,
-    // Rx of requests from states -> hsm. Note: currently only checked while handling other events
-    // TODO - devise a method for the HSMEngine to be woken up if any requests come in
-    state_proxy_requests: Receiver<StateEngineMessages<StateEvents>>,
     // This is risky and could lead to us getting stuck!
-    pending_events: Vec<StateEvents>,
-    pub(crate) phantom_state_enum: PhantomData<StateType>,
+    // These are events that are queued up while handling other events
+    pending_events: RefCell<Vec<EventT>>,
+    // Track if we have already changed state whole handling an event
+    already_changed_state: RefCell<bool>,
+    /// When handling an event, it is moved/owned by us in this variable.
+    /// Also acts as a tracker for if we are in the middle of handling an event.
+    /// Why important? What if in handle_event, a state tells their controller to dispatch an event back at us?
+    /// We use this to know that the event should be queued up.
+    in_progress_event_name: RefCell<Option<String>>,
+    pub(crate) phantom_state_enum: PhantomData<StateT>,
 }
 
-impl<StateType: StateTypeTrait, StateEvents: StateEventTrait> HSMEngine<StateType, StateEvents> {
+impl<StateT: StateConstraint, EventT: StateEventConstraint> HSMEngine<StateT, EventT> {
     /// Create an HSM engine.
     /// Highly recommend NOT exposing the HSMEngine beyond your container.
-    pub(crate) fn new(
+    /// Will need to be built up after the fact - via the builder!
+    pub fn new(
         hsm_name: String,
-        logger: HSMLogger,
-        starting_state: StateId,
-        state_mapping: StateMapping<StateType, StateEvents>,
-        state_proxy_requests: Receiver<StateEngineMessages<StateEvents>>,
-    ) -> HSMResult<HSMEngine<StateType, StateEvents>, StateType> {
-        logger.log_info(
+        logger_level: LevelFilter,
+    ) -> HSMResult<Rc<HSMEngine<StateT, EventT>>, StateT> {
+        let engine = HSMEngine {
+            hsm_name,
+            current_state: RefCell::new(None),
+            current_handle_string: RefCell::new(String::new()),
+            state_mapping: RefCell::new(StateMapping::<StateT, EventT>::new_default()),
+            logger: HSMLogger::new(logger_level),
+            pending_events: Default::default(),
+            phantom_state_enum: PhantomData,
+            already_changed_state: RefCell::new(false),
+            in_progress_event_name: RefCell::new(None),
+        };
+        Ok(Rc::new(engine))
+    }
+
+    pub fn get_delegate(this: &Rc<Self>) -> Rc<Self> {
+        this.clone()
+    }
+
+    // Hide state ID's from users!
+    /// Add the relationship between 2 states based on their id's.
+    /// We have no knowledge of the state objects themselves.
+    /// Helps us de-couple adding a state to the engine vs creating the states.
+    pub fn add_state<T: Display + Into<u16> + From<u16>>(
+        &self,
+        new_state: StateBox<StateT, EventT>,
+        new_state_metadata: T,
+        parent_state: Option<T>,
+    ) -> HSMResult<(), StateT> {
+        let new_state_id = StateId::new(new_state_metadata.into());
+        self.state_mapping
+            .borrow_mut()
+            .add_state_internal(new_state_id.clone(), parent_state)?;
+        self.state_mapping
+            .borrow_mut()
+            .transfer_state(new_state, new_state_id)
+    }
+
+    /// Initializes the HSM - required before use!
+    pub fn init(&self, starting_state: u16) -> HSMResult<(), StateT> {
+        self.state_mapping.borrow().validate_cross_states()?;
+
+        let initial_state_struct = StateId::from(starting_state);
+        match self
+            .state_mapping
+            .borrow()
+            .is_state_id_valid(&initial_state_struct)
+        {
+            true => Ok(()),
+            false => Err(HSMError::InvalidStateId(
+                StateT::from(starting_state),
+                get_function_name!(),
+            )),
+        }?;
+        self.logger.log_info(
             get_function_name!(),
             format!(
                 "Initial State: {}",
-                StateType::from(*starting_state.get_id())
+                StateT::from(*initial_state_struct.get_id())
             )
             .as_str(),
         );
-
-        let mut engine = HSMEngine {
-            hsm_name,
-            current_state: starting_state.clone(),
-            state_change_string: RefCell::new(String::new()),
-            state_mapping,
-            logger,
-            state_proxy_requests,
-            pending_events: Default::default(),
-            phantom_state_enum: PhantomData,
-        };
-        engine.enter_states_lca_to_target(starting_state, true)?;
-        Ok(engine)
+        *self.current_state.borrow_mut() = Some(initial_state_struct.clone());
+        self.enter_states_lca_to_target(initial_state_struct, true)
     }
 
-    pub fn get_current_state(&self) -> HSMResult<StateType, StateType> {
-        let state_id = self.current_state.clone();
-        let state: StateType = state_id.get_id().clone().into();
+    pub fn get_current_state(&self) -> HSMResult<StateT, StateT> {
+        let state: StateT = self
+            .current_state
+            .borrow()
+            .as_ref()
+            .ok_or_else(|| HSMError::EngineNotInitialized())?
+            .to_owned()
+            .get_id()
+            .clone()
+            .into();
         Ok(state)
     }
 
     /// Send an event into the HSM from within the HSM.
     /// i.e. a state fires an event while handling another event
-    fn handle_event_internally(&mut self, event: StateEvents) -> HSMResult<(), StateType> {
+    fn handle_event_internally(&self, event: EventT) -> HSMResult<(), StateT> {
         // keep going until event is handled (true) or we reach the end
 
         // State id is the variable updated each loop!
-        let mut current_state_id = self
+        let event_start_state_id = self
+            .current_state
+            .borrow()
+            .clone()
+            .ok_or_else(|| HSMError::EngineNotInitialized())?;
+
+        // Validate the current state can handle events / is in the mapping
+        match self
             .state_mapping
-            .get_state_container(&self.current_state.clone())
-            .ok_or_else(|| {
-                HSMError::InvalidStateId(StateType::from(*self.current_state.clone().get_id()))
-            })?
-            .get_state_id()
-            .clone();
+            .borrow()
+            .is_state_valid(&event_start_state_id)
+        {
+            false => Err(HSMError::InvalidStateId(
+                StateT::from(event_start_state_id.get_id().to_owned()),
+                get_function_name!(),
+            )),
+            true => Ok(()),
+        }?;
 
         let hsm_name = self.get_hsm_name();
-        self.clear_state_change_string();
-        self.update_state_change_string(
+        self.clear_handle_string();
+        self.update_handle_string(
             format!(
                 "{}: {}({}): ",
                 hsm_name,
-                resolve_state_name::<StateType>(&current_state_id),
-                event
+                resolve_state_name::<StateT>(&event_start_state_id),
+                &event
             )
             .as_str(),
         );
 
-        loop {
-            let current_state_container =
-                match self.state_mapping.get_state_container(&current_state_id) {
-                    None => break,
-                    Some(current_state) => current_state,
-                };
+        let mut current_state_id = event_start_state_id.to_owned();
 
+        loop {
             let event_name = event.get_event_name().clone();
-            let is_handled = current_state_container
-                .state_ref
-                .borrow_mut()
-                .handle_event(&event);
+            *self.in_progress_event_name.borrow_mut() = Some(event_name.clone());
+            // TODO - if the StateEventConstraint allowed an optional override to translate the args to display, this would be more useful
+            // self.update_handle_string(format!("{}()", event_name).as_str());
+            // self.update_handle_string("");
+
+            let is_handled = self
+                .state_mapping
+                .borrow()
+                .handle_event(&current_state_id, &event)?;
 
             if is_handled {
                 break;
@@ -124,122 +188,54 @@ impl<StateType: StateTypeTrait, StateEvents: StateEventTrait> HSMEngine<StateTyp
                 get_function_name!(),
                 format!(
                     "{} Handling Event {}",
-                    resolve_state_name::<StateType>(&self.current_state.clone()),
+                    resolve_state_name::<StateT>(&current_state_id),
                     event_name,
                 )
                 .as_str(),
             );
 
-            let next_state_id = self
+            let next_state_id = match self
                 .state_mapping
-                .get_parent_state_id(&current_state_container.state_id);
-
-            let next_state = match next_state_id {
-                None => break,
-                Some(next_id) => self
-                    .state_mapping
-                    .get_state_container(&next_id)
-                    .ok_or_else(|| {
-                        HSMError::ImpossibleStateMismatch(
-                            StateType::from(*current_state_container.state_id.get_id()),
-                            StateType::from(*next_id.get_id()),
-                        )
-                    })?,
+                .borrow()
+                .get_parent_state_id(&current_state_id)
+            {
+                None => break, // Reached Top State
+                Some(next_id) => next_id,
             };
+
+            self.state_mapping
+                .borrow()
+                .is_state_id_valid_result(&next_state_id)?;
 
             self.logger.log_debug(
                 get_function_name!(),
                 format!(
                     "Letting Parent State Handle the event: {}({})",
                     event.get_event_name(),
-                    utils::resolve_state_name::<StateType>(&next_state.get_state_id()),
+                    utils::resolve_state_name::<StateT>(&next_state_id),
                 )
                 .as_str(),
             );
 
             // Maybe the parent state handles this
-            current_state_id = next_state.get_state_id().clone();
+            current_state_id = next_state_id.clone();
         }
 
-        self.process_proxy_requests(&event)?;
+        // If we get here, the event has been handled by at least one state (or none and we error'd)
+        *self.in_progress_event_name.borrow_mut() = None;
 
         // Check for pending events! Doing this ensures we will always handle all pending events!
         // TODO - Is there a way we could do this asynchronously / non-recursively?
-        match self.pending_events.pop() {
+        let next_event = self.pending_events.borrow_mut().pop();
+        match next_event {
             None => Ok(()),
             Some(pending_event) => self.handle_event_internally(pending_event),
         }
     }
 
-    pub fn get_state_name(&self, state_id: &u16) -> HSMResult<String, StateType> {
-        let name = StateType::from(*state_id).to_string();
+    pub fn get_state_name(&self, state_id: &u16) -> HSMResult<String, StateT> {
+        let name = StateT::from(*state_id).to_string();
         Ok(name)
-    }
-
-    /// Check the rx end of the delegate channel for any requests from states!
-    /// # Note
-    /// * This implicitly defers all state changes and event firings until the
-    /// end of handling the current event.
-    /// * Follows the ethos of "run current task to completion"
-    fn process_proxy_requests(&mut self, current_event: &StateEvents) -> HSMResult<(), StateType> {
-        // TODO - right now, this only gets woken up if an external consumer sends an event
-        // It should also be woken up if anyone puts a request on the channel.
-        loop {
-            let req = match self.state_proxy_requests.recv_timeout(Duration::new(0, 0)) {
-                Err(_) => break, // all proxy requests have been processed! We are done!
-                Ok(req) => req,
-            };
-
-            // Only allow 1 state change per time this function is called!
-            // Changing state multiple times per singular event handled could lead
-            // to UB/race conditions on consumer HSM's.
-            // .....unless should we trust consumers to not foot-gun themselves?
-            let mut already_changed_state = false;
-            self.handle_single_proxy_request(req, &current_event, &mut already_changed_state)?;
-        }
-
-        self.post_handle_event_operations();
-        Ok(())
-    }
-
-    fn handle_single_proxy_request(
-        &mut self,
-        req: StateEngineMessages<StateEvents>,
-        current_event: &StateEvents,
-        already_changed_state: &mut bool,
-    ) -> HSMResult<(), StateType> {
-        match req {
-            StateEngineMessages::ChangeState(requesting_state, new_state) => {
-                if *already_changed_state == true {
-                    let err = HSMError::MultipleConcurrentChangeState(
-                        StateType::from(*requesting_state.get_id()),
-                        StateType::from(*self.current_state.get_id()),
-                        current_event.get_event_name(),
-                    );
-                    if cfg!(test) {
-                        assert!(false, "{}", err);
-                        return Err(err);
-                    } else {
-                        return Err(err);
-                    }
-                }
-                *already_changed_state = true;
-                self.handle_state_change(new_state.clone())?;
-            }
-            StateEngineMessages::FireEvent(requesting_state, new_evt) => {
-                let state_type = StateType::from(*requesting_state.get_id());
-                self.update_state_change_string(
-                    format!(
-                        "[State {}: Adding event {} to queue]",
-                        state_type,
-                        new_evt.get_event_name()
-                    )
-                    .as_str(),
-                );
-                self.pending_events.push(new_evt);
-            }
-        }
-        Ok(())
     }
 
     /// # Brief
@@ -247,8 +243,8 @@ impl<StateType: StateTypeTrait, StateEvents: StateEventTrait> HSMEngine<StateTyp
     /// THEN handle start on target.
     /// # NOTE
     /// CHANGE STATES ARE ENQUEUED via delegate!
-    fn handle_state_change(&mut self, requested_state_change: StateId) -> HSMResult<(), StateType> {
-        let is_target_current = self.current_state.clone() == requested_state_change;
+    fn handle_state_change(&self, requested_state: StateId) -> HSMResult<(), StateT> {
+        let is_target_current = self.current_state.borrow().as_ref() == Some(&requested_state);
 
         // We don't clear requests once completed - requires too much mutable access
         // Just no-op on all subsequent events
@@ -256,117 +252,101 @@ impl<StateType: StateTypeTrait, StateEvents: StateEventTrait> HSMEngine<StateTyp
             return Ok(());
         }
 
-        let requested_state = requested_state_change;
-        let target_state = self
-            .state_mapping
-            .get_state_container(&requested_state)
-            .ok_or_else(|| HSMError::InvalidStateId(StateType::from(*requested_state.get_id())))
-            .and_then(|container| Ok(StateType::from(*container.state_id.get_id())))?;
-        let target_state_id = StateId::new(target_state.into());
+        let target_state_id = {
+            let target_state: StateT = self
+                .state_mapping
+                .borrow()
+                .is_state_id_valid_result(&requested_state)
+                .and_then(|_| Ok(StateT::from(*requested_state.get_id())))?;
+            StateId::new(target_state.into())
+        };
 
         assert!(
-            self.state_mapping.is_state_id_valid(&requested_state),
+            self.state_mapping
+                .borrow()
+                .is_state_id_valid(&requested_state),
             "State with id {} invalid! ",
             requested_state.get_id()
         );
 
-        let current_state_id = self.current_state.clone();
+        let lca_state_id = self.find_lca(
+            self.current_state
+                .borrow()
+                .clone()
+                .ok_or_else(|| HSMError::EngineNotInitialized())?,
+            requested_state.clone(),
+        )?;
 
-        let lca_state_id = self.find_lca(current_state_id.clone(), requested_state.clone())?;
-
-        if lca_state_id != self.current_state {
+        if lca_state_id
+            != *self
+                .current_state
+                .borrow()
+                .as_ref()
+                .ok_or_else(|| HSMError::EngineNotInitialized())?
+        {
             self.exit_states_until_target(lca_state_id)?;
         }
 
         self.enter_states_lca_to_target(requested_state, false)?;
 
         self.set_current_state(&target_state_id)?;
+        self.handle_event_complete();
 
         Ok(())
     }
 
     /// get LCA between current state and other state
-    fn find_lca(
-        &self,
-        source_state: StateId,
-        target_state: StateId,
-    ) -> HSMResult<StateId, StateType> {
-        assert!(source_state != target_state);
-        //  USE resolve_path_to_root from state mapping
-        let source_path_to_root = self.state_mapping.resolve_path_to_root(&source_state)?;
-        let target_path_to_root = self.state_mapping.resolve_path_to_root(&target_state)?;
-
-        let mut root_to_source_path = source_path_to_root;
-        root_to_source_path.reverse();
-        let mut root_to_target_path = target_path_to_root;
-        root_to_target_path.reverse();
-
-        // Compare the two paths, starting from the ends of the paths (where the root is)
-        // keep going until the nodes diverge. The last node before the paths diverge is the LCA.
-        // let mut last_known_common_state = self.top_state_id.clone();
-        // this works but is gross
-
-        // https://stackoverflow.com/a/29504547/14810215
-        // Get all differences between them...but we only care about the first
-        let shared_paths = root_to_source_path
-            .iter()
-            .zip(root_to_target_path.iter())
-            .filter(|&(source_node, target_node)| source_node.state_id == target_node.state_id)
-            .collect::<Vec<(
-                &&StateContainer<StateType, StateEvents>,
-                &&StateContainer<StateType, StateEvents>,
-            )>>();
-        if shared_paths.len() == 0 {
-            return Err(HSMError::LCAOfSameNode());
-        }
-        let last_known_common_state = shared_paths.iter().last().unwrap().0.state_id.clone();
-
-        Ok(last_known_common_state)
+    fn find_lca(&self, source_state: StateId, target_state: StateId) -> HSMResult<StateId, StateT> {
+        self.state_mapping
+            .borrow()
+            .find_lca(&source_state, &target_state)
     }
 
     /// Exits all states along the path to target (not including target)
-    fn exit_states_until_target(&mut self, target_state_id: StateId) -> HSMResult<(), StateType> {
-        self.update_state_change_string("[");
+    fn exit_states_until_target(&self, target_state_id: StateId) -> HSMResult<(), StateT> {
+        self.update_handle_string("[");
         let mut exited_first_state = false;
 
-        let current_state_id = self.current_state.clone();
+        let mut current_state_id = self.current_state.borrow().clone();
+        match current_state_id {
+            Some(_) => Ok(()),
+            None => Err(HSMError::EngineNotInitialized()),
+        }?;
 
-        let mut current_state_id = Some(
-            self.state_mapping
-                .get_state_container(&current_state_id)
-                .ok_or_else(|| HSMError::ControllerNotInitialized())?
-                .state_id
-                .clone(),
-        );
+        self.state_mapping
+            .borrow()
+            .is_state_id_valid_result(&current_state_id.clone().unwrap())?;
 
         loop {
-            let current_state_container = match current_state_id.clone() {
-                None => break, // Happens when we reach top
-                Some(state_id) => self
-                    .state_mapping
-                    .get_state_container(&state_id)
-                    .ok_or_else(|| HSMError::InvalidStateId(StateType::from(*state_id.get_id())))?,
+            match current_state_id.clone() {
+                // None => break, // Happens when we reach top. The "next" computes a None
+                None => break, // Happens when we reach top. The "next" computes a None
+                Some(state_id) => {
+                    if state_id == target_state_id.clone() {
+                        // Once we reach the LCA/target, stop exiting
+                        break;
+                    }
+                    self.state_mapping
+                        .borrow()
+                        .is_state_id_valid_result(&state_id)?
+                }
             };
+            let unwrapped_id = current_state_id.clone().unwrap();
 
-            if current_state_container.state_id == target_state_id {
-                break;
-            }
-
-            let current_state_name =
-                resolve_state_name::<StateType>(&current_state_id.clone().unwrap());
+            let current_state_name = resolve_state_name::<StateT>(&unwrapped_id);
 
             if exited_first_state {
-                self.update_state_change_string(", ");
+                self.update_handle_string(", ");
             }
 
-            self.update_state_change_string(format!("{}(EXIT)", current_state_name).as_str());
+            self.update_handle_string(format!("{}(EXIT)", current_state_name).as_str());
 
-            current_state_container
-                .state_ref
-                .borrow_mut()
-                .handle_state_exit();
+            // current_state_container.state_ref.handle_state_exit();
+            self.state_mapping
+                .borrow()
+                .handle_state_exit(&unwrapped_id)?;
 
-            let next_state_id = self.state_mapping.get_parent_state_id(
+            let next_state_id = self.state_mapping.borrow().get_parent_state_id(
                 &current_state_id
                     .clone()
                     .expect("Already break'd if this wasn't true!"),
@@ -375,23 +355,22 @@ impl<StateType: StateTypeTrait, StateEvents: StateEventTrait> HSMEngine<StateTyp
             exited_first_state = true;
         }
 
-        self.update_state_change_string("], ");
+        self.update_handle_string("], ");
         Ok(())
     }
 
     /// Assumes we have already exited all states (non-inclusive) to the LCA
     /// Starts the target state
     fn enter_states_lca_to_target(
-        &mut self,
+        &self,
         target_state_id: StateId,
         is_init_enter: bool,
-    ) -> HSMResult<(), StateType> {
-        let target_to_lca_path = self.state_mapping.resolve_path_to_root(&target_state_id)?;
-        let target_state_container = self
+    ) -> HSMResult<(), StateT> {
+        let target_to_lca_path: Vec<StateId> = self
             .state_mapping
-            .get_state_container(&target_state_id)
-            .ok_or_else(|| HSMError::InvalidStateId(StateType::from(*target_state_id.get_id())))?;
-        let target_state = StateType::from(*target_state_container.state_id.get_id());
+            .borrow()
+            .resolve_path_to_root(&target_state_id)?;
+        let target_state = StateT::from(*target_state_id.get_id());
         let target_state_name = target_state.to_string();
 
         let mut lca_to_target_path = target_to_lca_path.into_iter().rev();
@@ -400,74 +379,73 @@ impl<StateType: StateTypeTrait, StateEvents: StateEventTrait> HSMEngine<StateTyp
             lca_to_target_path.next();
         }
 
-        self.update_state_change_string("[");
+        self.update_handle_string("[");
 
-        for entering_state_container in lca_to_target_path {
-            let state_to_enter_container = self
-                .state_mapping
-                .get_state_container(&entering_state_container.state_id)
-                .ok_or_else(|| {
-                    HSMError::InvalidStateId(StateType::from(
-                        *entering_state_container.state_id.get_id(),
-                    ))
-                })?;
-            state_to_enter_container
-                .state_ref
-                .borrow_mut()
-                .handle_state_enter();
+        for entering_state_id in lca_to_target_path {
+            self.state_mapping
+                .borrow()
+                .handle_state_enter(&entering_state_id)?;
 
-            let state_to_enter_name =
-                resolve_state_name::<StateType>(&state_to_enter_container.state_id);
+            let state_to_enter_name = resolve_state_name::<StateT>(&entering_state_id);
             self.logger.log_trace(
                 get_function_name!(),
                 format!("Entering {}", state_to_enter_name).as_str(),
             );
-            self.update_state_change_string(format!("{}(ENTER), ", state_to_enter_name).as_str());
+            self.update_handle_string(format!("{}(ENTER), ", state_to_enter_name).as_str());
         }
 
         // Start the target state!
-        target_state_container
-            .state_ref
-            .borrow_mut()
-            .handle_state_start();
+        self.state_mapping
+            .borrow()
+            .handle_state_start(&target_state_id)?;
         self.logger.log_trace(
             get_function_name!(),
             format!("Starting {}", target_state_name).as_str(),
         );
-        self.update_state_change_string(format!("{}(START)]", target_state_name).as_str());
+        self.update_handle_string(format!("{}(START)]", target_state_name).as_str());
         Ok(())
     }
 
     /// Operations to be performed after handling an event, regardless of outcome!
-    fn post_handle_event_operations(&mut self) {
+    fn handle_event_complete(&self) {
         // Log the current chain and reset the message
-        println!("{}", self.state_change_string.borrow());
-        self.clear_state_change_string();
+        self.logger.log_info(
+            get_function_name!(),
+            self.current_handle_string.borrow().as_str(),
+        );
+        self.clear_handle_string();
     }
 
-    // TODO consider putting this into a channel as well so that
     /// Main API for consumers of the HSM to fire events into it.
-    pub fn dispatch_event(&mut self, event: StateEvents) -> HSMResult<(), StateType> {
-        // Override for a more custom implementation
-        if self.pending_events.len() > 0 {
-            self.pending_events.push(event);
+    pub fn dispatch_event(&self, event: EventT) -> HSMResult<(), StateT> {
+        let no_event_in_progress = self.in_progress_event_name.borrow().is_none();
+        if no_event_in_progress {
+            return self.handle_event_internally(event);
+        }
+
+        let pending_events_during_handle = self.pending_events.borrow().len() > 0;
+
+        if pending_events_during_handle {
+            // We are in the middle of handling another event and somehow a state asked their controller to handle_event
+            self.pending_events.borrow_mut().push(event);
             Ok(())
         } else {
             self.handle_event_internally(event)
         }
     }
 
-    fn set_current_state(&mut self, new_current_state: &StateId) -> HSMResult<(), StateType> {
-        self.current_state = new_current_state.clone();
+    fn set_current_state(&self, new_current_state: &StateId) -> HSMResult<(), StateT> {
+        *self.current_state.borrow_mut() = Some(new_current_state.clone());
+        *self.already_changed_state.borrow_mut() = false;
         Ok(())
     }
 
-    fn update_state_change_string(&self, append_str: &str) {
-        self.state_change_string.borrow_mut().push_str(append_str);
+    fn update_handle_string(&self, append_str: &str) {
+        self.current_handle_string.borrow_mut().push_str(append_str);
     }
 
-    fn clear_state_change_string(&self) {
-        self.state_change_string.borrow_mut().clear();
+    fn clear_handle_string(&self) {
+        self.current_handle_string.borrow_mut().clear();
     }
 
     fn get_hsm_name(&self) -> String {
@@ -475,175 +453,69 @@ impl<StateType: StateTypeTrait, StateEvents: StateEventTrait> HSMEngine<StateTyp
     }
 }
 
-/// Struct encapsulating the process of building an HsmController.
-/// Enforces immutability of the controller as states are added.
-/// Effectively the public API to the controller for consumers.
-/// After it is destroyed / init is called, the controller is self-managing
-pub struct HSMEngineBuilder<StateType: StateTypeTrait, StateEvents: StateEventTrait> {
-    unfinished_state_map: HashMap<StateId, StateContainer<StateType, StateEvents>>,
-    // Resolve parent states into refs only once all states have been added!
-    unfinished_state_parent_map: HashMap<StateId, StateId>,
-    state_added: Vec<StateId>,
-    hsm_name: String,
-    top_state_id: StateId,
-    logger: HSMLogger,
-    engine_log_level: HSMLogger,
-    delegates_provided: RefCell<Vec<StateId>>,
-    engine_delegate_rx: Receiver<StateEngineMessages<StateEvents>>,
-    state_delegate_tx: Sender<StateEngineMessages<StateEvents>>,
-}
-
-impl<StateType: StateTypeTrait, StateEvents: StateEventTrait>
-    HSMEngineBuilder<StateType, StateEvents>
+impl<StateT: StateConstraint, EventT: StateEventConstraint> EngineDelegateIF<StateT, EventT>
+    for HSMEngine<StateT, EventT>
 {
-    pub fn new(
-        hsm_name: String,
-        top_state_id: u16,
-        builder_logger_level: LevelFilter,
-        engine_log_level: LevelFilter,
-    ) -> HSMEngineBuilder<StateType, StateEvents> {
-        let (state_delegate_tx, engine_delegate_rx) = channel::<StateEngineMessages<StateEvents>>();
-        HSMEngineBuilder {
-            // controller_under_construction: controller,
-            unfinished_state_map: Default::default(),
-            unfinished_state_parent_map: Default::default(),
-            state_added: Default::default(),
-            hsm_name,
-            top_state_id: StateId::new(top_state_id),
-            logger: builder_logger_level.into(),
-            engine_log_level: engine_log_level.into(),
-            delegates_provided: Default::default(),
-            engine_delegate_rx,
-            state_delegate_tx,
-        }
-    }
-
-    pub fn create_delegate(
-        &self,
-        requested_state_for_delegate: u16,
-    ) -> HSMResult<StateEngineDelegate<StateType, StateEvents>, StateType> {
-        let state = match StateType::try_from(requested_state_for_delegate) {
-            Err(_) => Err(HSMError::NotAState(requested_state_for_delegate)),
-            Ok(state) => Ok(state),
-        }?;
-        let delegate_already_created: bool = self
-            .delegates_provided
-            .borrow()
-            .iter()
-            .find(|state_already_delegated| {
-                *state_already_delegated.get_id() == state.clone().into()
-            })
-            .is_some();
-        match delegate_already_created {
-            true => Err(HSMError::AlreadyDelegated(state)),
-            false => {
-                let state_id = StateId::new(requested_state_for_delegate);
-                self.delegates_provided.borrow_mut().push(state_id.clone());
-                Ok(StateEngineDelegate::new(
-                    self.state_delegate_tx.clone(),
-                    state_id,
-                ))
+    fn change_state(&self, new_state: u16) -> HSMResult<(), StateT> {
+        let current_event_name = match self.in_progress_event_name.borrow().as_ref() {
+            None => String::from("Unknown"),
+            Some(name) => name.clone(),
+        };
+        if *self.already_changed_state.borrow() == true {
+            let err = HSMError::MultipleConcurrentChangeState(
+                StateT::from(new_state.clone()),
+                StateT::from(
+                    *self
+                        .current_state
+                        .borrow()
+                        .as_ref()
+                        .ok_or_else(|| HSMError::EngineNotInitialized())?
+                        .get_id(),
+                ),
+                current_event_name.to_string(),
+            );
+            if cfg!(test) {
+                assert!(false, "{}", err);
+                return Err(err);
+            } else {
+                return Err(err);
             }
         }
+        *self.already_changed_state.borrow_mut() = true;
+        self.handle_state_change(StateId::from(new_state))
     }
 
-    // Hide state ID's from users!
-    pub fn add_state<T: Display + Into<u16> + From<u16>>(
-        mut self,
-        new_state: StateBox<StateType, StateEvents>,
-        new_state_metadata: T,
-        parent_state: Option<T>,
-    ) -> Self {
-        let new_state_id = StateId::new(new_state_metadata.into());
-        let new_state_container: StateContainer<StateType, StateEvents> =
-            StateContainer::new(new_state_id.clone(), new_state);
-        if new_state_id != self.top_state_id && parent_state.is_none() {
-            panic!("You reserved StateId {} as the Tup, but state {} does not have parents. There cannot be 2 tops states!",
-                self.top_state_id,
-                new_state_id
-            );
-        }
-
-        // Validate the state has not been added already!
-
-        self.unfinished_state_map
-            .insert(new_state_id.clone(), new_state_container);
-
-        let mut parent_state_id: Option<StateId> = None;
-        if parent_state.is_some() {
-            let parent_state_metadata = parent_state.unwrap();
-            parent_state_id = Some(StateId::new(parent_state_metadata.into()));
-            self.unfinished_state_parent_map
-                .insert(new_state_id.clone(), parent_state_id.clone().unwrap());
-        }
-        self.state_added.push(new_state_id.clone());
-
-        self.logger.log_debug(
+    fn internal_handle_event(&self, event: EventT) -> HSMResult<(), StateT> {
+        let in_progress_event_name = match self.in_progress_event_name.borrow().clone() {
+            None => "Unknown Event".to_string(),
+            Some(name) => name,
+        };
+        self.logger.log_info(
             get_function_name!(),
             format!(
-                "{}) Adding state {} with parent {}",
-                LevelFilter::Info.as_str(),
-                resolve_state_name::<StateType>(&new_state_id),
-                match parent_state_id {
-                    None => "None".to_owned(),
-                    Some(parent_id) => resolve_state_name::<StateType>(&parent_id),
-                },
+                "{}: [Adding event {} to queue while]",
+                in_progress_event_name,
+                event.get_event_name()
             )
             .as_str(),
         );
-
-        self
-    }
-
-    /// Final step in process
-    pub fn init(
-        self,
-        initial_state_id: u16,
-    ) -> HSMResult<HSMEngine<StateType, StateEvents>, StateType> {
-        let initial_state_id_struct = StateId::new(initial_state_id);
-
-        let state_mapping = StateMapping::new(
-            self.unfinished_state_map,
-            self.unfinished_state_parent_map,
-            Some(self.logger),
-        );
-        match state_mapping.is_state_id_valid(&initial_state_id_struct) {
-            true => Ok(()),
-            false => Err(HSMError::InvalidStateId(StateType::from(initial_state_id))),
-        }?;
-        assert!(state_mapping.validate_cross_states());
-
-        let engine = HSMEngine::new(
-            self.hsm_name,
-            self.engine_log_level,
-            initial_state_id.into(),
-            state_mapping,
-            self.engine_delegate_rx,
-        );
-
-        engine
+        self.pending_events.borrow_mut().push(event);
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::test_utils::*;
-    use crate::examples::*;
+    // use crate::examples::*;
 
     #[test]
     fn handle_state_change() {
-        let _ = build_test_hsm(ExampleStates::Top);
+        // todo!()
     }
 
-    #[test]
-    fn handle_single_proxy_request() {
-        let _ = build_test_hsm(ExampleStates::Top);
-    }
-
-    #[test]
-    fn process_proxy_requests()
-    {
-
+    fn internal_handle_event() {
+        // todo!()
     }
 
     #[test]
@@ -652,35 +524,22 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_event()
-    {
-
-    }
+    fn dispatch_event() {}
 
     #[test]
     fn find_lca() {
         // todo!()
     }
 
+    #[test]
+    fn enter_states_lca_to_target() {}
 
     #[test]
-    fn enter_states_lca_to_target()
-    {
-
-    }
-
-    #[test]
-    fn exit_states_until_target()
-    {
-
-    }
+    fn exit_states_until_target() {}
 
     /// In particular, test multi-thread scenarios where concurrently:
     ///     1) External threads send events to the HSM.
-    ///     2) States of the HSM fire events into the HSM while handling current events.
+    ///     2) StateT of the HSM fire events into the HSM while handling current events.
     #[test]
-    fn test_many_queued_events()
-    {
-
-    }
+    fn test_many_queued_events() {}
 }

@@ -7,6 +7,14 @@ pub struct HSMLogger {
     pub(crate) log_level_allowed: log::LevelFilter,
 }
 
+impl Default for HSMLogger {
+    fn default() -> Self {
+        Self {
+            log_level_allowed: log::LevelFilter::Info,
+        }
+    }
+}
+
 impl HSMLogger {
     /// # Params
     /// level_allowed - The level of logs that will actually be printed
