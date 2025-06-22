@@ -1,10 +1,8 @@
-///! Contains structs and infrastructure useful for minimal examples in docs (and tests)
+//! Contains structs and infrastructure useful for minimal examples in docs (and tests)
 use crate::{
-    errors::{HSMError, HSMResult},
     events::StateEventConstraint,
     state::{StateConstraint, StateIF, StateId},
     state_engine_delegate::EngineDelegate,
-    utils::resolve_state_name,
 };
 
 use std::cell::RefCell;
@@ -21,15 +19,15 @@ pub enum ExampleStates {
     LevelA2 = 4,
 }
 
-impl Into<u16> for ExampleStates {
-    fn into(self) -> u16 {
-        self as u16
+impl From<ExampleStates> for u16 {
+    fn from(val: ExampleStates) -> Self {
+        val as u16
     }
 }
 
-impl Into<StateId> for ExampleStates {
-    fn into(self) -> StateId {
-        StateId::new(self as u16)
+impl From<ExampleStates> for StateId {
+    fn from(val: ExampleStates) -> Self {
+        StateId::new(val as u16)
     }
 }
 
@@ -245,9 +243,7 @@ impl StateIF<ExampleStates, ExampleEvents> for B1Impl {
     fn handle_event(&self, event: &ExampleEvents) -> bool {
         // B handles all events besides A
         match event {
-            ExampleEvents::A => {
-                return false;
-            }
+            ExampleEvents::A => false,
             ExampleEvents::B(_) => {
                 self.data.borrow_mut().count_b_handled_true += 1;
                 true

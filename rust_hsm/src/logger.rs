@@ -1,4 +1,4 @@
-///! Encapsulates how information should be logged!
+//! Encapsulates how information should be logged!
 use log::LevelFilter;
 
 #[derive(Clone)]

@@ -5,7 +5,7 @@ use light_hsm::{
 };
 
 fn main() {
-    let mut light_hsm = LightControllerHsm::new(log::LevelFilter::Info);
+    let light_hsm = LightControllerHsm::new(log::LevelFilter::Info);
 
     let starting_state = light_hsm.get_current_state();
     assert!(

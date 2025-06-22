@@ -11,18 +11,14 @@ pub(crate) struct LightStateTop {
 
 impl LightStateTop {
     pub fn new(shared_data: LightHsmDataRef) -> Box<Self> {
-        let built_state = Box::new(Self { shared_data });
-
-        built_state
+        Box::new(Self { shared_data })
     }
 }
 
 impl StateIF<LightStates, LightEvents> for LightStateTop {
-    fn handle_event(&self, event: &LightEvents) -> bool {
+    fn handle_event(&self, _event: &LightEvents) -> bool {
         // top returns true for all events
-        match event {
-            _ => true,
-        }
+        true
     }
     fn handle_state_start(&self) {
         self.shared_data.borrow_mut().top_start_called += 1;

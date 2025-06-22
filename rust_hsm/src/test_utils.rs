@@ -1,23 +1,20 @@
-///! Contains structs and data useful across the module when running tests
+//! Contains structs and data useful across the module when running tests
 ///
 use crate::{
+    examples::ExampleStates,
     examples::*,
-    state::{StateConstraint, StateContainer, StateIF, StateId},
+    state::{StateConstraint, StateIF, StateId},
     state_engine::HSMEngine,
-    state_engine_delegate::{
-        delegate_test_utils::MockedDelegate, EngineDelegate, EngineDelegateIF,
-    },
+    state_engine_delegate::delegate_test_utils::MockedDelegate,
 };
 
 use log;
 use log::LevelFilter;
-use ouroboros::self_referencing;
-
 use std::{cell::RefCell, ops::Add, rc::Rc};
 
 pub struct DummyStateStruct<ExampleStates: StateConstraint> {
     state_started: RefCell<bool>,
-    delegate: MockedDelegate<ExampleStates, ExampleEvents>,
+    _delegate: MockedDelegate<ExampleStates, ExampleEvents>,
     _num_created: u16,
 }
 
@@ -57,16 +54,10 @@ impl DummyStateStruct<ExampleStates> {
 
         Box::new(Self {
             state_started: RefCell::new(false),
-            delegate: MockedDelegate::new(),
+            _delegate: MockedDelegate::new(),
             _num_created: num_states_created_counter.clone(),
         })
     }
-}
-
-pub(crate) fn create_dummy_state(
-    num_states_created_counter: &mut u16,
-) -> Box<DummyStateStruct<ExampleStates>> {
-    return DummyStateStruct::new(num_states_created_counter);
 }
 
 pub(crate) fn cast_id_vector(state_list: &Vec<StateId>) -> Vec<ExampleStates> {

@@ -1,10 +1,6 @@
-///! Module encapsulating the state data delegate which can be used extensively
-///! throughout the library but is obscured to consumers
-use crate::{
-    errors::{HSMError, HSMResult},
-    events::StateEventConstraint,
-    state::{StateConstraint, StateId},
-};
+//! Module encapsulating the state data delegate which can be used extensively
+//! throughout the library but is obscured to consumers
+use crate::{errors::HSMResult, events::StateEventConstraint};
 use std::rc::Rc;
 
 /// Trait representing a valid object delegating powers of the Engine to others (states).
@@ -27,8 +23,6 @@ pub mod delegate_test_utils {
 
     use super::*;
     use crate::events::StateEventConstraint;
-    use crate::examples::*;
-    use crate::state::StateConstraint;
 
     #[derive(Debug, strum::Display, PartialEq, Clone)]
     pub enum DelegateTestEvent {
@@ -67,9 +61,8 @@ pub mod delegate_test_utils {
         }
     }
 
-    fn create_mock_delegate<StateT, EventT: StateEventConstraint>(
-        state_id: u16,
-    ) -> MockedDelegate<StateT, EventT> {
+    fn create_mock_delegate<StateT, EventT: StateEventConstraint>() -> MockedDelegate<StateT, EventT>
+    {
         MockedDelegate {
             change_states_requested: Default::default(),
             internal_events_handled: Default::default(),

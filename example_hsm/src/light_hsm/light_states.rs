@@ -14,9 +14,9 @@ pub(crate) enum LightStates {
 }
 
 // TODO - a lot of this is boiler plate....try to make a macro!
-impl Into<u16> for LightStates {
-    fn into(self) -> u16 {
-        self as u16
+impl From<LightStates> for u16 {
+    fn from(val: LightStates) -> Self {
+        val as u16
     }
 }
 

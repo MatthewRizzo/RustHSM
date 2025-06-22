@@ -1,5 +1,5 @@
-///! This file contains the logic for an individual state and how they link together
-use std::{boxed::Box, cell::RefCell, fmt::Display, vec::Vec};
+//! This file contains the logic for an individual state and how they link together
+use std::{boxed::Box, fmt::Display, vec::Vec};
 
 use crate::{
     errors::HSMResult, events::StateEventConstraint, state_engine_delegate::EngineDelegate,
@@ -90,7 +90,7 @@ pub(crate) struct StateContainer<StateT: StateConstraint, EventT: StateEventCons
 impl<StateT: StateConstraint, EventT: StateEventConstraint> StateContainer<StateT, EventT> {
     pub(crate) fn new(state_id: StateId, state_ref: StateBox<StateT, EventT>) -> Self {
         Self {
-            state_ref: state_ref,
+            state_ref,
             state_id,
         }
     }

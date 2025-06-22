@@ -1,6 +1,7 @@
+//! This file contains the logic for how states are grouped together.
+//! Using this info, the entire "tree" of states can be resolved!
+
 use log::{self, LevelFilter};
-///! This file contains the logic for how states are grouped together.
-///! Using this info, the entire "tree" of states can be resolved!
 use std::{cell::RefCell, collections::HashMap};
 
 use crate::{
@@ -27,6 +28,7 @@ pub(crate) struct StateMapping<StateT: StateConstraint, EventT: StateEventConstr
 }
 
 impl<StateT: StateConstraint, EventT: StateEventConstraint> StateMapping<StateT, EventT> {
+    #[cfg(test)]
     pub(crate) fn new(
         top_state_id: StateId,
         state_map: HashMap<StateId, StateContainer<StateT, EventT>>,
@@ -52,10 +54,6 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> StateMapping<StateT,
         }
     }
 
-    pub(crate) fn get_registered_state_id(&self) -> Vec<StateId> {
-        self.state_parent_map.keys().cloned().collect()
-    }
-
     pub(crate) fn transfer_state(
         &mut self,
         new_state: StateBox<StateT, EventT>,
@@ -71,8 +69,8 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> StateMapping<StateT,
         {
             None => Ok(()),
             Some(_) => Err(HSMError::AddDuplicateStateId(
-                StateT::from(new_state_id.get_id().clone()),
-                new_state_id.clone(),
+                StateT::from(*new_state_id.get_id()),
+                *new_state_id.get_id(),
             )),
         }?;
 
@@ -89,9 +87,9 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> StateMapping<StateT,
             if new_state_id != chosen_top && parent_state.is_none() {
                 return Err(HSMError::MultipleTopState(
                     resolve_state_name::<StateT>(&chosen_top),
-                    chosen_top.clone(),
+                    *chosen_top.get_id(),
                     new_state_name,
-                    new_state_id,
+                    *new_state_id.get_id(),
                 ));
             }
         };
@@ -122,17 +120,11 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> StateMapping<StateT,
 
     /// Return the id of state's parent
     pub(crate) fn get_parent_state_id(&self, id: &StateId) -> Option<StateId> {
-        match self.state_parent_map.get(id) {
-            None => None,
-            Some(parent) => Some(parent.clone()),
-        }
+        self.state_parent_map.get(id).cloned()
     }
 
     pub(crate) fn is_state_valid(&self, id: &StateId) -> bool {
-        match self.state_map.get(id) {
-            None => false,
-            Some(_) => true,
-        }
+        self.state_map.contains_key(id)
     }
 
     pub(crate) fn handle_event(&self, id: &StateId, event: &EventT) -> HSMResult<bool, StateT> {
@@ -141,7 +133,7 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> StateMapping<StateT,
                 StateT::from(*id.get_id()),
                 get_function_name!(),
             )),
-            Some(container) => Ok(container.state_ref.handle_event(&event)),
+            Some(container) => Ok(container.state_ref.handle_event(event)),
         }
     }
 
@@ -151,7 +143,10 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> StateMapping<StateT,
                 StateT::from(*id.get_id()),
                 get_function_name!(),
             )),
-            Some(container) => Ok(container.state_ref.handle_state_enter()),
+            Some(container) => {
+                container.state_ref.handle_state_enter();
+                Ok(())
+            }
         }
     }
 
@@ -161,7 +156,10 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> StateMapping<StateT,
                 StateT::from(*id.get_id()),
                 get_function_name!(),
             )),
-            Some(container) => Ok(container.state_ref.handle_state_start()),
+            Some(container) => {
+                container.state_ref.handle_state_start();
+                Ok(())
+            }
         }
     }
 
@@ -171,7 +169,10 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> StateMapping<StateT,
                 StateT::from(*id.get_id()),
                 get_function_name!(),
             )),
-            Some(container) => Ok(container.state_ref.handle_state_exit()),
+            Some(container) => {
+                container.state_ref.handle_state_exit();
+                Ok(())
+            }
         }
     }
 
@@ -202,7 +203,7 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> StateMapping<StateT,
             .zip(root_to_target_path.iter())
             .filter(|&(source_node, target_node)| source_node == target_node)
             .collect::<Vec<(&StateId, &StateId)>>();
-        if shared_paths.len() == 0 {
+        if shared_paths.is_empty() {
             return Err(HSMError::LCAOfSameNode());
         }
         let last_known_common_state = shared_paths.iter().last().unwrap().0.clone();
@@ -219,7 +220,7 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> StateMapping<StateT,
         let mut current_node_id = start_node.clone();
         let current_node = self
             .state_map
-            .get(&start_node)
+            .get(start_node)
             .ok_or_else(|| {
                 HSMError::InvalidStateId(StateT::from(*start_node.get_id()), get_function_name!())
             })?
@@ -249,11 +250,7 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> StateMapping<StateT,
                     path_to_root.push(parent_id.clone());
                     self.logger.log_debug(
                         get_function_name!(),
-                        format!(
-                            "Next State: {}",
-                            StateT::from(*parent_id.get_id()).to_string()
-                        )
-                        .as_str(),
+                        format!("Next State: {}", StateT::from(*parent_id.get_id())).as_str(),
                     );
                     parent_id
                 }
@@ -267,7 +264,7 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> StateMapping<StateT,
     // Pan
     pub(crate) fn validate_cross_states(&self) -> HSMResult<(), StateT> {
         for (parent_lookup_id, parent_id) in &self.state_parent_map {
-            if self.state_map.get(&parent_lookup_id).is_none() {
+            if !self.state_map.contains_key(parent_lookup_id) {
                 let msg = format!(
                     "State id from parent map {} does not exist in state map!",
                     parent_lookup_id
@@ -276,7 +273,7 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> StateMapping<StateT,
                 return Err(HSMError::MapValidationError(msg));
             }
 
-            if self.state_map.get(&parent_id).is_none() {
+            if !self.state_map.contains_key(parent_id) {
                 let msg = format!(
                     "Parent State id from parent map {} does not exist in state map!",
                     parent_id
@@ -306,7 +303,6 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> StateMapping<StateT,
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc::channel;
 
     use crate::examples::*;
     use crate::test_utils::*;
@@ -361,6 +357,7 @@ mod tests {
             raw_parent_map,
             Some(LevelFilter::Trace.into()),
         );
+
         test_logger.log_info(get_function_name!(), "Assembled the mappings!");
 
         assert!(mapping

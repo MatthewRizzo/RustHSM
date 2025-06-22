@@ -1,4 +1,3 @@
-use crate::state::{StateConstraint, StateId};
 use thiserror::Error;
 
 // pub type HSMResult<T> = std::result::Result<T, HSMError>;
@@ -8,7 +7,7 @@ pub type HSMResult<T, States> = std::result::Result<T, HSMError<States>>;
 #[derive(Error, Debug)]
 pub enum HSMError<StateT> {
     #[error("State {0} with id {1} already added, but is getting added again!")]
-    AddDuplicateStateId(StateT, StateId),
+    AddDuplicateStateId(StateT, u16),
     #[error("Event Not Implemented Error: {0}")]
     EventNotImplemented(String),
     #[error("StateEngine was never initialized. Make sure to call init before using state-related API's!")]
@@ -26,5 +25,5 @@ pub enum HSMError<StateT> {
     #[error("Requesting change state to {0}, but there was already a change state request to {1} while handling {2}" )]
     MultipleConcurrentChangeState(StateT, StateT, String),
     #[error("Reserved State {0} with id {1} as Top, but then added state {2} with id {3} without parents")]
-    MultipleTopState(String, StateId, String, StateId),
+    MultipleTopState(String, u16, String, u16),
 }

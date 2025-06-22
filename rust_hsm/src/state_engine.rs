@@ -1,25 +1,18 @@
+//! This file contains the logic for a state engine comprised of many
+//! composable states
 use crate::{
     errors::{HSMError, HSMResult},
     events::StateEventConstraint,
     logger::HSMLogger,
-    state::{StateBox, StateConstraint, StateId, States},
+    state::{StateBox, StateConstraint, StateId},
     state_engine_delegate::EngineDelegateIF,
-    state_mapping::{self, StateMapping},
+    state_mapping::StateMapping,
     utils::{self, get_function_name, resolve_state_name},
 };
-///! This file contains the logic for a state engine comprised of many
-///! composable states
 use core::fmt::Display;
 use log::LevelFilter;
 
-use std::{
-    cell::RefCell,
-    collections::HashMap,
-    default::{self, Default},
-    marker::PhantomData,
-    rc::{self, Rc, Weak},
-    vec,
-};
+use std::{cell::RefCell, default::Default, marker::PhantomData, rc::Rc};
 
 /// Runs the orchestration of the state 'machine' while considering its hierarchy/
 /// TODO - remove RefCell for StateMapping using a builder.
@@ -118,15 +111,14 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> HSMEngine<StateT, Ev
     }
 
     pub fn get_current_state(&self) -> HSMResult<StateT, StateT> {
-        let state: StateT = self
+        let state: StateT = (*self
             .current_state
             .borrow()
             .as_ref()
             .ok_or_else(|| HSMError::EngineNotInitialized())?
             .to_owned()
-            .get_id()
-            .clone()
-            .into();
+            .get_id())
+        .into();
         Ok(state)
     }
 
@@ -257,7 +249,7 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> HSMEngine<StateT, Ev
                 .state_mapping
                 .borrow()
                 .is_state_id_valid_result(&requested_state)
-                .and_then(|_| Ok(StateT::from(*requested_state.get_id())))?;
+                .map(|_| StateT::from(*requested_state.get_id()))?;
             StateId::new(target_state.into())
         };
 
@@ -423,7 +415,7 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> HSMEngine<StateT, Ev
             return self.handle_event_internally(event);
         }
 
-        let pending_events_during_handle = self.pending_events.borrow().len() > 0;
+        let pending_events_during_handle = !self.pending_events.borrow().is_empty();
 
         if pending_events_during_handle {
             // We are in the middle of handling another event and somehow a state asked their controller to handle_event
@@ -461,9 +453,9 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> EngineDelegateIF<Sta
             None => String::from("Unknown"),
             Some(name) => name.clone(),
         };
-        if *self.already_changed_state.borrow() == true {
+        if *self.already_changed_state.borrow() {
             let err = HSMError::MultipleConcurrentChangeState(
-                StateT::from(new_state.clone()),
+                StateT::from(new_state),
                 StateT::from(
                     *self
                         .current_state
@@ -475,8 +467,7 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> EngineDelegateIF<Sta
                 current_event_name.to_string(),
             );
             if cfg!(test) {
-                assert!(false, "{}", err);
-                return Err(err);
+                panic!("{}", err);
             } else {
                 return Err(err);
             }
@@ -506,9 +497,6 @@ impl<StateT: StateConstraint, EventT: StateEventConstraint> EngineDelegateIF<Sta
 
 #[cfg(test)]
 mod tests {
-    use crate::test_utils::*;
-    // use crate::examples::*;
-
     #[test]
     fn handle_state_change() {
         // todo!()

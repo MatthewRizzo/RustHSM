@@ -10,7 +10,6 @@ use crate::light_hsm::{
     light_states::LightStates,
 };
 
-use log;
 use std::rc::Rc;
 
 pub struct LightControllerHsm {
@@ -48,18 +47,16 @@ impl LightControllerHsm {
             .unwrap();
         engine.init(LightStates::DIMMER as u16).unwrap();
 
-        let light_hsm = LightControllerHsm {
+        LightControllerHsm {
             engine,
             _shared_data: shared_data.clone(),
-        };
-
-        light_hsm
+        }
     }
 
     /// Note: exposing the current state is ALSO a really bad idea.
     pub(crate) fn get_current_state(&self) -> LightStates {
         // In a real system you would want to translate from HSMResult -> your result
-        self.engine.get_current_state().unwrap().into()
+        self.engine.get_current_state().unwrap()
     }
 
     pub(crate) fn dispatch_into_hsm(&self, event: LightEvents) -> HSMResult<(), LightStates> {

@@ -16,12 +16,10 @@ impl LightStateDimmer {
         shared_data: LightHsmDataRef,
         delegate: EngineDelegate<LightStates, LightEvents>,
     ) -> Box<Self> {
-        let built_state = Box::new(Self {
+        Box::new(Self {
             delegate,
             shared_data,
-        });
-
-        built_state
+        })
     }
 
     fn set_to_percentage(&self, percentage: u8) -> bool {
